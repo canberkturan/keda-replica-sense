@@ -1,0 +1,103 @@
+package forecaster
+
+import (
+	"context"
+	"github.com/canberkturan/keda-replica-sense/internal/domain"
+	"github.com/canberkturan/keda-replica-sense/internal/forecast"
+	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
+	"testing"
+	"time"
+)
+
+type samples struct{ values []domain.Sample }
+
+func (s samples) ListSamplesForWindow(context.Context, workloadstore.SamplingWorkload, time.Time, time.Time) ([]domain.Sample, error) {
+	return s.values, nil
+}
+
+type snapshots struct{ s domain.ForecastSnapshot }
+
+func (s *snapshots) SaveSnapshot(_ context.Context, v domain.ForecastSnapshot) error {
+	s.s = v
+	return nil
+}
+func (s *snapshots) LatestSnapshot(context.Context, forecast.Lookup) (*domain.ForecastSnapshot, error) {
+	return &s.s, nil
+}
+func TestForecast(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vals := []domain.Sample{{ObservedAt: start, ObservedValue: 1}, {ObservedAt: start.Add(time.Minute), ObservedValue: 2}, {ObservedAt: start.Add(2 * time.Minute), ObservedValue: 3}, {ObservedAt: start.Add(3 * time.Minute), ObservedValue: 4}}
+	out := &snapshots{}
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 3}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 4 * time.Minute, Horizon: time.Minute}}}
+	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 4}.Forecast(context.Background(), w, start.Add(4*time.Minute))
+	if err != nil || got.SafeDemand != 3 {
+		t.Fatalf("%#v %v", got, err)
+	}
+}
+
+func TestForecastFreezesPredictiveScaleUpWhenCapacityDenied(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vals := []domain.Sample{{ObservedAt: start, ObservedValue: 1}, {ObservedAt: start.Add(time.Minute), ObservedValue: 2}, {ObservedAt: start.Add(2 * time.Minute), ObservedValue: 3}, {ObservedAt: start.Add(3 * time.Minute), ObservedValue: 4}}
+	out := &snapshots{}
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 10}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 4 * time.Minute, Horizon: time.Minute}}}
+	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 4, CurrentReplicas: func(context.Context, workloadstore.SamplingWorkload) (float64, error) { return 2, nil }, PredictiveAllowed: func(context.Context, workloadstore.SamplingWorkload, float64, float64) bool { return false }}.Forecast(context.Background(), w, start.Add(4*time.Minute))
+	if err != nil || got.SafeDemand != 2 || got.SafetyReason != "baseline_replicas;capacity_unavailable" {
+		t.Fatalf("Forecast() = %#v, %v", got, err)
+	}
+}
+
+func TestForecastPersistsStartupAwareDecisionHorizon(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vals := []domain.Sample{{ObservedAt: start, ObservedValue: 1}, {ObservedAt: start.Add(time.Minute), ObservedValue: 2}, {ObservedAt: start.Add(2 * time.Minute), ObservedValue: 3}, {ObservedAt: start.Add(3 * time.Minute), ObservedValue: 4}}
+	out := &snapshots{}
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 10}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 4 * time.Minute, Horizon: time.Minute, StartupLatency: time.Minute, SafetyBuffer: time.Minute}}}
+	_, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 4}.Forecast(context.Background(), w, start.Add(4*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.s.ForecastHorizon, 3*time.Minute; got != want {
+		t.Fatalf("stored horizon = %s, want %s", got, want)
+	}
+}
+
+func TestForecastPersistsSurgeProjectionAsOperationalP95(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vals := []domain.Sample{
+		{ObservedAt: start, ObservedValue: 1},
+		{ObservedAt: start.Add(time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(2 * time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(3 * time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(4 * time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(5 * time.Minute), ObservedValue: 10},
+	}
+	out := &snapshots{}
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 30}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 6 * time.Minute, Horizon: time.Minute}}}
+	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 6, MaxAbsoluteStep: 30}.Forecast(context.Background(), w, start.Add(6*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ForecastP95 != 1 || got.SurgeDemand != 20 || got.SafetyReason != "abnormal_slope_or_baseline;rate_limited" {
+		t.Fatalf("Forecast() = %#v", got)
+	}
+}
+
+func TestForecastCanDisableSurgeDetectionForModelEvaluation(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vals := []domain.Sample{
+		{ObservedAt: start, ObservedValue: 1},
+		{ObservedAt: start.Add(time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(2 * time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(3 * time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(4 * time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(5 * time.Minute), ObservedValue: 10},
+	}
+	out := &snapshots{}
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 30}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 6 * time.Minute, Horizon: time.Minute}}}
+	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 6, MaxAbsoluteStep: 30, DisableSurgeDetection: true}.Forecast(context.Background(), w, start.Add(6*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ForecastP95 != 1 || got.SurgeDemand != 0 {
+		t.Fatalf("Forecast() = %#v", got)
+	}
+}
