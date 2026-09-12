@@ -1,0 +1,150 @@
+{{- $root := . -}}
+{{- if not .Values.clusterID }}{{ fail "clusterID is required" }}{{ end }}
+{{- range $component, $config := .Values.components }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" $root "component" $component) }}
+  labels:
+    {{- include "replicasense.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  replicas: {{ $config.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  template:
+    metadata:
+      labels:
+        {{- include "replicasense.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $component }}
+    spec:
+      {{- if $config.serviceAccount }}
+      serviceAccountName: {{ include "replicasense.componentName" (dict "root" $root "component" $config.serviceAccount) }}
+      {{- end }}
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $config.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $root.Values.securityContext | nindent 8 }}
+      containers:
+        - name: {{ $component }}
+          image: {{ printf "%s:%s" $config.image.repository ($config.image.tag | toString) | quote }}
+          imagePullPolicy: {{ $root.Values.imagePullPolicy }}
+          securityContext:
+            {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
+          {{- with $config.ports }}
+          ports:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: REPLICASENSE_CLUSTER_ID
+              value: {{ $root.Values.clusterID | quote }}
+            - name: REPLICASENSE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $root.Values.database.existingSecret | quote }}
+                  key: {{ $root.Values.database.urlKey | quote }}
+            {{- if eq $component "controller" }}
+            - name: REPLICASENSE_SCALER_ADDRESSES
+              value: {{ printf "%s.%s.svc:%v" (include "replicasense.componentName" (dict "root" $root "component" "scaler")) $root.Release.Namespace $root.Values.scaler.service.port | quote }}
+            - name: REPLICASENSE_LEADER_ELECTION
+              value: "true"
+            - name: REPLICASENSE_LEADER_ELECTION_NAMESPACE
+              value: {{ $root.Release.Namespace | quote }}
+            {{- end }}
+            {{- if eq $component "training-scheduler" }}
+            - name: REPLICASENSE_TRAINER_SERVICE_ACCOUNT
+              value: {{ include "replicasense.componentName" (dict "root" $root "component" "trainer") | quote }}
+            - name: REPLICASENSE_TRAINER_DATABASE_SECRET
+              value: {{ $root.Values.database.existingSecret | quote }}
+            - name: REPLICASENSE_TRAINER_DATABASE_SECRET_KEY
+              value: {{ $root.Values.database.urlKey | quote }}
+            - name: REPLICASENSE_TRAINER_IMAGE_PULL_POLICY
+              value: {{ $root.Values.imagePullPolicy | quote }}
+            {{- end }}
+            {{- range $key, $value := $config.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- if $config.probes }}
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8081}
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8081}
+          {{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "scaler") }}
+  labels:
+    {{- include "replicasense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scaler
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: scaler
+  ports:
+    - name: grpc
+      port: {{ .Values.scaler.service.port }}
+      targetPort: grpc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "sampler") }}
+  labels:
+    {{- include "replicasense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sampler
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: sampler}
+  ports: [{name: metrics, port: 8080, targetPort: metrics}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "forecaster") }}
+  labels:
+    {{- include "replicasense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: forecaster
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: forecaster}
+  ports: [{name: metrics, port: 8080, targetPort: metrics}]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "scaler") }}
+spec:
+  minAvailable: {{ .Values.scaler.pdb.minAvailable }}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: scaler}
+{{- if .Values.serviceMonitor.enabled }}
+{{- range $component := list "sampler" "forecaster" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" $root "component" $component) }}
+  labels:
+    {{- include "replicasense.labels" $root | nindent 4 }}
+    {{- with $root.Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ $component }}
+  endpoints: [{port: metrics, path: /metrics, interval: {{ $root.Values.serviceMonitor.interval | quote }}}]
+{{- end }}
+{{- end }}

@@ -1,0 +1,93 @@
+{{- $root := . -}}
+{{- range $component := list "controller" "forecaster" "training-scheduler" "trainer" }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" $root "component" $component) }}
+  labels:
+    {{- include "replicasense.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}
+rules:
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller-leader-election") }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller-leader-election") }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "replicasense.componentName" (dict "root" . "component" "controller-leader-election") }}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "forecaster") }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "forecaster") }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "replicasense.componentName" (dict "root" . "component" "forecaster") }}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "replicasense.componentName" (dict "root" . "component" "forecaster") }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "training-scheduler") }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "training-scheduler") }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "replicasense.componentName" (dict "root" . "component" "training-scheduler") }}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "replicasense.componentName" (dict "root" . "component" "training-scheduler") }}
+    namespace: {{ .Release.Namespace }}

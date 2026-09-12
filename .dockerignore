@@ -1,0 +1,4 @@
+.git
+.build
+.helm-packages
+.DS_Store

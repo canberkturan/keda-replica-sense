@@ -1,0 +1,150 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/canberkturan/keda-replica-sense/internal/domain"
+	"github.com/canberkturan/keda-replica-sense/internal/forecaster"
+	"github.com/canberkturan/keda-replica-sense/internal/kube"
+	"github.com/canberkturan/keda-replica-sense/internal/observability"
+	"github.com/canberkturan/keda-replica-sense/internal/postgres"
+	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+)
+
+func main() {
+	cluster, databaseURL := os.Getenv("REPLICASENSE_CLUSTER_ID"), os.Getenv("REPLICASENSE_DATABASE_URL")
+	if cluster == "" || databaseURL == "" {
+		fmt.Fprintln(os.Stderr, "REPLICASENSE_CLUSTER_ID and REPLICASENSE_DATABASE_URL are required")
+		os.Exit(1)
+	}
+	period := durationEnv("REPLICASENSE_SEASONAL_PERIOD", 24*time.Hour)
+	interval := durationEnv("REPLICASENSE_FORECAST_INTERVAL", time.Minute)
+	minimum := intEnv("REPLICASENSE_FORECAST_MIN_SAMPLES", 0)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "create PostgreSQL pool:", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+	repo := postgres.NewSampleRepository(pool)
+	clientConfig, err := rest.InClusterConfig()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "create Kubernetes config:", err)
+		os.Exit(1)
+	}
+	kubeClient, err := kubernetes.NewForConfig(clientConfig)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "create Kubernetes client:", err)
+		os.Exit(1)
+	}
+	replicaReader := kube.DeploymentReplicaReader{Client: kubeClient}
+	healthChecker := kube.ClusterHealthChecker{Client: kubeClient, MaxUnschedulablePods: intEnv("REPLICASENSE_MAX_UNSCHEDULABLE_PODS", 0)}
+	capacityGuard := kube.CapacityGuard{Client: kubeClient, HeadroomFraction: floatEnv("REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION", 0.25)}
+	forecastRepository := postgres.NewForecastRepository(pool)
+	budgetGuard := forecaster.SpeculativeBudgetGuard{Reader: forecastRepository, ClusterID: cluster, MaxAdditionalReplicas: floatEnv("REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET", 50)}
+	modelCache := forecaster.NewModelCache(cluster, postgres.NewModelRepository(pool), durationEnv("REPLICASENSE_MODEL_MAX_AGE", 72*time.Hour))
+	metricsRegistry := prometheus.NewRegistry()
+	metrics := observability.NewForecasterMetrics(metricsRegistry)
+	metricsServer := &http.Server{Addr: valueOrDefault("REPLICASENSE_METRICS_LISTEN_ADDRESS", ":8080"), Handler: promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
+	go func() {
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fmt.Fprintln(os.Stderr, "serve metrics:", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = metricsServer.Shutdown(shutdownContext)
+	}()
+	service := forecaster.Service{Samples: repo, Snapshots: forecastRepository, SeasonalPeriod: period, MinimumSamples: minimum, DisableSurgeDetection: boolEnv("REPLICASENSE_DISABLE_SURGE_DETECTION", false), Models: modelCache, CurrentReplicas: func(ctx context.Context, w workloadstore.SamplingWorkload) (float64, error) {
+		return replicaReader.CurrentReplicas(ctx, w.Spec.Key.Namespace, w.Spec.ScaleTarget.Name)
+	}, ClusterHealthy: healthChecker.Healthy}
+	service.PredictiveAllowed = func(ctx context.Context, w workloadstore.SamplingWorkload, current, desired float64) bool {
+		return capacityGuard.Allows(ctx, w.Spec.Key.Namespace, w.Spec.ScaleTarget.Name, current, desired) && budgetGuard.Allows(ctx, w, desired)
+	}
+	service.OnForecast = func(w workloadstore.SamplingWorkload, snapshot domain.ForecastSnapshot) {
+		metrics.Record(w, snapshot, time.Now())
+	}
+	evaluator := postgres.NewEvaluator(pool)
+	for {
+		now := time.Now()
+		if err := modelCache.Refresh(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "refresh active models:", err)
+		}
+		workloads, err := repo.ListActiveForCluster(ctx, cluster)
+		if err == nil {
+			for _, w := range workloads {
+				if _, err := service.Forecast(ctx, w, now); err != nil {
+					fmt.Fprintln(os.Stderr, "forecast:", err)
+				}
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "list workloads:", err)
+		}
+		if err := evaluator.EvaluateMatured(ctx, now); err != nil {
+			fmt.Fprintln(os.Stderr, "evaluate forecasts:", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
+func durationEnv(name string, fallback time.Duration) time.Duration {
+	if raw := os.Getenv(name); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	return fallback
+}
+func intEnv(name string, fallback int) int {
+	if raw := os.Getenv(name); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func boolEnv(name string, fallback bool) bool {
+	if raw := os.Getenv(name); raw != "" {
+		if value, err := strconv.ParseBool(raw); err == nil {
+			return value
+		}
+	}
+	return fallback
+}
+
+func floatEnv(name string, fallback float64) float64 {
+	if raw := os.Getenv(name); raw != "" {
+		if value, err := strconv.ParseFloat(raw, 64); err == nil && value > 0 && value <= 1 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func valueOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}

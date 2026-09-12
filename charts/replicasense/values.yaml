@@ -1,0 +1,75 @@
+clusterID: ""
+
+# The Secret must contain a complete PostgreSQL connection string under urlKey.
+# Migrations are intentionally managed separately from the application release.
+database:
+  existingSecret: replicasense-database
+  urlKey: url
+
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+serviceMonitor:
+  enabled: true
+  labels: {}
+  interval: 15s
+
+components:
+  controller:
+    replicas: 2
+    image: {repository: ghcr.io/canberkturan/replicasense-controller, tag: "0.2.2"}
+    serviceAccount: controller
+    ports: []
+    env: {}
+    probes: true
+  sampler:
+    replicas: 1
+    image: {repository: ghcr.io/canberkturan/replicasense-sampler, tag: "0.2.2"}
+    ports: [{name: metrics, containerPort: 8080}]
+    env: {}
+  scaler:
+    replicas: 2
+    image: {repository: ghcr.io/canberkturan/replicasense-scaler, tag: "0.2.2"}
+    ports: [{name: grpc, containerPort: 6000}]
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/component: scaler
+    env: {}
+  forecaster:
+    replicas: 1
+    image: {repository: ghcr.io/canberkturan/replicasense-forecaster, tag: "0.2.2-xgboost"}
+    serviceAccount: forecaster
+    ports: [{name: metrics, containerPort: 8080}]
+    env:
+      REPLICASENSE_SEASONAL_PERIOD: 24h
+      REPLICASENSE_FORECAST_INTERVAL: 1m
+      REPLICASENSE_MODEL_MAX_AGE: 72h
+  training-scheduler:
+    replicas: 1
+    image: {repository: ghcr.io/canberkturan/replicasense-training-scheduler, tag: "0.2.2"}
+    serviceAccount: training-scheduler
+    ports: []
+    env:
+      REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.2.2-xgboost
+      REPLICASENSE_TRAINING_INTERVAL: 1h
+
+scaler:
+  service:
+    port: 6000
+  pdb:
+    minAvailable: 1
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile: {type: RuntimeDefault}
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: ["ALL"]}
