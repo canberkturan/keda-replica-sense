@@ -1,0 +1,114 @@
+name: Release to GHCR
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ghcr-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/replicasense
+
+jobs:
+  runtime-images:
+    name: Runtime image — ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - controller
+          - sampler
+          - scaler
+          - forecaster
+          - trainer
+          - training-scheduler
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: COMMAND=replicasense-${{ matrix.component }}
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+
+  xgboost-images:
+    name: Native XGBoost image — ${{ matrix.component }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [forecaster, trainer]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}
+          tags: |
+            type=semver,pattern={{version}},suffix=-xgboost
+            type=sha,prefix=sha-,suffix=-xgboost
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.xgboost
+          build-args: COMMAND=replicasense-${{ matrix.component }}
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+
+  helm-chart:
+    name: Helm OCI chart
+    needs: [runtime-images, xgboost-images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check tag and chart version match
+        run: test "v$(awk '$1 == "version:" {print $2}' charts/replicasense/Chart.yaml)" = "$GITHUB_REF_NAME"
+      - run: helm lint charts/replicasense
+      - run: helm package charts/replicasense --destination .helm-packages
+      - run: helm push .helm-packages/replicasense-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts

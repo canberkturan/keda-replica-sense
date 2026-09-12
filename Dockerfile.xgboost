@@ -1,0 +1,39 @@
+# Build image for the optional native XGBoost trainer/forecaster engine.
+# It is separate from the default static image because libxgboost is a dynamic
+# C++ library and must travel with the process that links to it.
+FROM golang:1.26.6-bookworm AS xgboost
+ARG XGBOOST_VERSION=v2.1.4
+ARG DMLC_CORE_COMMIT=13341857549852a9a86b1894b5ba84c6276ab381
+ARG GPUTREESHAP_COMMIT=787259b412c18ab8d5f24bf2b8bd6a59ff8208f3
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates cmake curl g++ make tar && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://github.com/dmlc/xgboost/archive/refs/tags/${XGBOOST_VERSION}.tar.gz" -o /tmp/xgboost.tar.gz \
+    && mkdir -p /src/xgboost \
+    && tar -xzf /tmp/xgboost.tar.gz --strip-components=1 -C /src/xgboost \
+    && mkdir -p /src/xgboost/dmlc-core /src/xgboost/gputreeshap \
+    && curl -fsSL "https://github.com/dmlc/dmlc-core/archive/${DMLC_CORE_COMMIT}.tar.gz" -o /tmp/dmlc-core.tar.gz \
+    && tar -xzf /tmp/dmlc-core.tar.gz --strip-components=1 -C /src/xgboost/dmlc-core \
+    && curl -fsSL "https://github.com/rapidsai/gputreeshap/archive/${GPUTREESHAP_COMMIT}.tar.gz" -o /tmp/gputreeshap.tar.gz \
+    && tar -xzf /tmp/gputreeshap.tar.gz --strip-components=1 -C /src/xgboost/gputreeshap \
+    && cmake -S /src/xgboost -B /src/xgboost/build -DBUILD_SHARED_LIBS=ON -DUSE_OPENMP=OFF \
+    && cmake --build /src/xgboost/build -j2 \
+    && cmake --install /src/xgboost/build --prefix /opt/xgboost \
+    && ln -sf libdmlc.so.0.3 /opt/xgboost/lib/libdmlc.so.0
+
+FROM golang:1.26.6-bookworm AS build
+ARG COMMAND
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+COPY --from=xgboost /opt/xgboost /opt/xgboost
+ENV CGO_ENABLED=1 CGO_CFLAGS=-I/opt/xgboost/include CGO_LDFLAGS="-L/opt/xgboost/lib -Wl,-rpath-link,/opt/xgboost/lib"
+RUN LD_LIBRARY_PATH=/opt/xgboost/lib go test -tags xgboost ./internal/xgboost ./internal/forecast
+RUN go build -tags xgboost -trimpath -o /replicasense ./cmd/${COMMAND}
+
+FROM debian:bookworm-slim
+COPY --from=xgboost /opt/xgboost/lib/libxgboost.so /usr/local/lib/libxgboost.so
+COPY --from=xgboost /opt/xgboost/lib/libdmlc.so.0.3 /usr/local/lib/libdmlc.so.0.3
+COPY --from=build /replicasense /replicasense
+RUN ldconfig
+USER 65532:65532
+ENTRYPOINT ["/replicasense"]
