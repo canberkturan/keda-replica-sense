@@ -57,7 +57,7 @@ components:
     ports: []
     env:
       REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.2.4-xgboost
-      REPLICASENSE_TRAINING_INTERVAL: 1h
+      REPLICASENSE_TRAINING_INTERVAL: 24h
 
 scaler:
   service:
