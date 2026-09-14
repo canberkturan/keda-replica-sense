@@ -22,11 +22,11 @@ The chart creates ServiceMonitors by default. If Prometheus Operator is not
 installed, set `serviceMonitor.enabled=false`.
 
 Published releases are available as an OCI chart. For example, after the
-`v0.2.2` Git tag completes the release workflow:
+`v0.2.3` Git tag completes the release workflow:
 
 ```bash
 helm upgrade --install replicasense oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.2.2 \
+  --version 0.2.3 \
   --namespace replicasense-system \
   --set clusterID=YOUR_CLUSTER_ID
 ```

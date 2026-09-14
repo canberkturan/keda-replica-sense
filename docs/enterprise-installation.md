@@ -17,11 +17,11 @@ checks.
 ## 1. Publish a release
 
 GitHub Actions publishes to GHCR only when a Git tag matches the chart version.
-If the `Chart.yaml` version is `0.2.2`, the tag must be `v0.2.2`.
+If the `Chart.yaml` version is `0.2.3`, the tag must be `v0.2.3`.
 
 ```bash
-git tag -a v0.2.2 -m "ReplicaSense 0.2.2"
-git push origin v0.2.2
+git tag -a v0.2.3 -m "ReplicaSense 0.2.3"
+git push origin v0.2.3
 ```
 
 The workflow publishes runtime images under
@@ -69,7 +69,7 @@ Use an immutable chart version and a stable cluster identifier.
 helm registry login ghcr.io
 helm upgrade --install replicasense \
   oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.2.2 \
+  --version 0.2.3 \
   --namespace replicasense-system \
   --set clusterID=production-cluster-1 \
   --set imagePullSecrets[0].name=ghcr-pull
