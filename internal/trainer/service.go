@@ -32,6 +32,7 @@ type Runs interface {
 type Models interface {
 	CreateCandidate(context.Context, training.ModelCandidate) (string, error)
 	Activate(context.Context, string) error
+	ActiveValidation(context.Context, string, string, string) (*forecast.ValidationMetrics, error)
 }
 
 type Service struct {
@@ -84,7 +85,7 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if err != nil {
 		return fmt.Errorf("load workload business timezone: %w", err)
 	}
-	request := forecast.Request{Horizon: workload.Spec.Forecast.DecisionHorizon(), SamplingInterval: workload.Spec.Forecast.SamplingInterval, SeasonalPeriod: 24 * time.Hour, BusinessLocation: location}
+	request := forecast.Request{Horizon: workload.Spec.Forecast.DecisionHorizon(), SamplingInterval: workload.Spec.Forecast.SamplingInterval, SeasonalPeriod: 24 * time.Hour, Quantile: workload.Spec.Forecast.Quantile, BusinessLocation: location}
 	var model forecast.Model
 	var validation forecast.ValidationMetrics
 	var artifact []byte
@@ -109,7 +110,21 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if err != nil {
 		return err
 	}
-	metrics, err := json.Marshal(map[string]any{"sample_count": len(samples), "baseline": model.Engine() != "xgboost", "walk_forward": validation})
+	// The deterministic seasonal baseline is evaluated on the same expanding
+	// windows as the candidate. It provides an auditable no-champion reference
+	// without looking beyond each validation cut.
+	baselineValidation, err := forecast.WalkForward(forecast.SeasonalBaseline{}, samples, request, 288)
+	if err != nil {
+		return fmt.Errorf("validate deterministic baseline: %w", err)
+	}
+	champion, championErr := s.Models.ActiveValidation(ctx, clusterID, workload.ID, workload.Spec.SourceFingerprint)
+	decision := training.PromotionDecision{}
+	if championErr != nil {
+		decision = training.PromotionDecision{Reason: "active_champion_validation_unavailable"}
+	} else {
+		decision = training.EvaluatePromotion(training.DefaultPromotionPolicy(), validation, champion, baselineValidation)
+	}
+	metrics, err := json.Marshal(map[string]any{"sample_count": len(samples), "baseline": model.Engine() != "xgboost", "operational_quantile": forecastOperationalQuantile(request), "walk_forward": validation, "deterministic_baseline": baselineValidation, "promotion": decision})
 	if err != nil {
 		return err
 	}
@@ -120,17 +135,26 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if err != nil {
 		return err
 	}
-	if err := s.Models.Activate(ctx, modelID); err != nil {
-		return fmt.Errorf("activate trained model: %w", err)
+	if decision.Promote {
+		if err := s.Models.Activate(ctx, modelID); err != nil {
+			return fmt.Errorf("activate trained model: %w", err)
+		}
 	}
 	return s.Runs.MarkSucceeded(ctx, runID, modelID, len(samples), metrics)
 }
 
 func featureSchemaFor(engine string) string {
 	if engine == "xgboost" {
-		return features.SchemaV2
+		return features.SchemaV3
 	}
 	return "v1"
+}
+
+func forecastOperationalQuantile(request forecast.Request) float64 {
+	if request.Quantile > 0 && request.Quantile < 1 {
+		return request.Quantile
+	}
+	return 0.95
 }
 
 func fingerprint(samples []domain.Sample) string {

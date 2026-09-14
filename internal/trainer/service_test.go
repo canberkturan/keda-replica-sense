@@ -2,20 +2,22 @@ package trainer
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/canberkturan/keda-replica-sense/internal/domain"
+	"github.com/canberkturan/keda-replica-sense/internal/forecast"
 	"github.com/canberkturan/keda-replica-sense/internal/training"
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
 )
 
-func TestServiceAutomaticallyActivatesValidatedModel(t *testing.T) {
+func TestServicePromotesValidatedCandidate(t *testing.T) {
 	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 	w := workloadstore.SamplingWorkload{ID: "w1", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "lab"}, SourceFingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Forecast: domain.ForecastConfig{ModelEngine: "seasonal-baseline", TrainingWindow: 24 * time.Hour, SamplingInterval: time.Hour, Horizon: time.Hour}}}
-	values := make([]domain.Sample, 26)
+	values := make([]domain.Sample, 49)
 	for i := range values {
-		values[i] = domain.Sample{ObservedAt: now.Add(-24 * time.Hour).Add(time.Duration(i) * time.Hour), ObservedValue: float64(i)}
+		values[i] = domain.Sample{ObservedAt: now.Add(-48 * time.Hour).Add(time.Duration(i) * time.Hour), ObservedValue: 10}
 	}
 	runs, models := &fakeRuns{}, &fakeModels{}
 	service := Service{Workloads: fakeWorkloads{items: []workloadstore.SamplingWorkload{w}}, Samples: fakeSamples{items: values}, Runs: runs, Models: models}
@@ -27,8 +29,37 @@ func TestServiceAutomaticallyActivatesValidatedModel(t *testing.T) {
 	}
 }
 
+func TestServicePersistsRejectedCandidateAndMarksRunSucceeded(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	w := workloadstore.SamplingWorkload{ID: "w1", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "lab"}, SourceFingerprint: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Forecast: domain.ForecastConfig{ModelEngine: "seasonal-baseline", TrainingWindow: 48 * time.Hour, SamplingInterval: time.Hour, Horizon: time.Hour}}}
+	values := make([]domain.Sample, 49)
+	for i := range values {
+		values[i] = domain.Sample{ObservedAt: now.Add(-48 * time.Hour).Add(time.Duration(i) * time.Hour), ObservedValue: float64(i)}
+	}
+	runs, models := &fakeRuns{}, &fakeModels{}
+	service := Service{Workloads: fakeWorkloads{items: []workloadstore.SamplingWorkload{w}}, Samples: fakeSamples{items: values}, Runs: runs, Models: models}
+	if err := service.Run(context.Background(), "lab", "w1", "run-1", "seasonal-baseline", now); err != nil {
+		t.Fatal(err)
+	}
+	if runs.modelID != "model-1" || models.activatedID != "" {
+		t.Fatalf("candidate must persist without activation: runs=%#v models=%#v", runs, models)
+	}
+	var stored struct {
+		Promotion struct {
+			Promote bool   `json:"promote"`
+			Reason  string `json:"reason"`
+		} `json:"promotion"`
+	}
+	if err := json.Unmarshal(models.candidate.ValidationMetrics, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Promotion.Promote || stored.Promotion.Reason == "" {
+		t.Fatalf("missing rejection audit record: %s", models.candidate.ValidationMetrics)
+	}
+}
+
 func TestFeatureSchemaForXGBoostUsesVersionedFeatureContract(t *testing.T) {
-	if got, want := featureSchemaFor("xgboost"), "demand-calendar-lag-v2"; got != want {
+	if got, want := featureSchemaFor("xgboost"), "demand-calendar-lag-v3"; got != want {
 		t.Fatalf("feature schema = %q, want %q", got, want)
 	}
 	if got := featureSchemaFor("seasonal-baseline"); got != "v1" {
@@ -69,6 +100,11 @@ func (f *fakeRuns) MarkFailed(_ context.Context, _ string, reason string) error 
 type fakeModels struct {
 	candidate   training.ModelCandidate
 	activatedID string
+	champion    *forecast.ValidationMetrics
+}
+
+func (f *fakeModels) ActiveValidation(context.Context, string, string, string) (*forecast.ValidationMetrics, error) {
+	return f.champion, nil
 }
 
 func (f *fakeModels) CreateCandidate(_ context.Context, candidate training.ModelCandidate) (string, error) {

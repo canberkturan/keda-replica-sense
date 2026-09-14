@@ -27,8 +27,8 @@ RUN go mod download
 COPY . .
 COPY --from=xgboost /opt/xgboost /opt/xgboost
 ENV CGO_ENABLED=1 CGO_CFLAGS=-I/opt/xgboost/include CGO_LDFLAGS="-L/opt/xgboost/lib -Wl,-rpath-link,/opt/xgboost/lib"
-RUN LD_LIBRARY_PATH=/opt/xgboost/lib go test -tags xgboost ./internal/xgboost ./internal/forecast
-RUN go build -tags xgboost -trimpath -o /replicasense ./cmd/${COMMAND}
+RUN LD_LIBRARY_PATH=/opt/xgboost/lib go test -tags xgboost ./...
+RUN go build -tags xgboost -buildvcs=false -trimpath -o /replicasense ./cmd/${COMMAND}
 
 FROM debian:bookworm-slim
 COPY --from=xgboost /opt/xgboost/lib/libxgboost.so /usr/local/lib/libxgboost.so

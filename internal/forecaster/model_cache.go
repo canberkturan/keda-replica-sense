@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -84,6 +85,11 @@ func (c *ModelCache) ModelFor(workload workloadstore.SamplingWorkload) (forecast
 	}
 	if configured := workload.Spec.Forecast.ModelEngine; configured != "" && cached.model.Engine() != configured {
 		return nil, false
+	}
+	if configured := workload.Spec.Forecast.Quantile; configured > 0 && configured < 1 {
+		if quantileModel, ok := cached.model.(forecast.UpperQuantileModel); ok && math.Abs(quantileModel.OperationalQuantile()-configured) > 1e-9 {
+			return nil, false
+		}
 	}
 	return cached.model, true
 }

@@ -15,22 +15,27 @@ import (
 	native "github.com/canberkturan/keda-replica-sense/internal/xgboost"
 )
 
-const xgboostFeatureSchema = features.SchemaV2
+const xgboostFeatureSchema = features.SchemaV3
 
 type xgboostArtifact struct {
 	Engine        string `json:"engine"`
 	Format        string `json:"format"`
 	FeatureSchema string `json:"feature_schema"`
-	P50Artifact   string `json:"p50_artifact_base64"`
-	P95Artifact   string `json:"p95_artifact_base64"`
+	// UpperQuantile describes the semantic value stored in P95Artifact. The
+	// P95 name is retained for database and API compatibility.
+	UpperQuantile float64 `json:"upper_quantile"`
+	P50Artifact   string  `json:"p50_artifact_base64"`
+	P95Artifact   string  `json:"p95_artifact_base64"`
 }
 
 type xgboostModel struct {
-	p50 *native.Model
-	p95 *native.Model
+	p50           *native.Model
+	p95           *native.Model
+	upperQuantile float64
 }
 
-func (m *xgboostModel) Engine() string { return "xgboost" }
+func (m *xgboostModel) Engine() string               { return "xgboost" }
+func (m *xgboostModel) OperationalQuantile() float64 { return m.upperQuantile }
 
 func (m *xgboostModel) PredictSamples(samples []domain.Sample, request Request) (Prediction, error) {
 	if m == nil || m.p50 == nil || m.p95 == nil {
@@ -56,10 +61,10 @@ func (m *xgboostModel) PredictSamples(samples []domain.Sample, request Request) 
 	return Prediction{P50: p50, P95: math.Max(p50, float64(p95Predictions[0]))}, nil
 }
 
-// TrainXGBoost creates immutable P50 and P95 UBJSON boosters. Both models
+// TrainXGBoost creates immutable P50 and upper-operational-quantile UBJSON boosters. Both models
 // learn the maximum observed demand in the requested future horizon, which is
-// the exact quantity used by predictive scaling. The P95 is trained with the
-// native quantile objective rather than adding an optimistic in-sample
+// the exact quantity used by predictive scaling. Both bounds are trained with
+// the native quantile objective rather than adding an optimistic in-sample
 // residual, which avoids leaking training fit into uncertainty estimates.
 func TrainXGBoost(samples []domain.Sample, request Request) (Model, []byte, error) {
 	features, labels, err := xgboostDataset(samples, request)
@@ -67,11 +72,12 @@ func TrainXGBoost(samples []domain.Sample, request Request) (Model, []byte, erro
 		return nil, nil, err
 	}
 	columns := len(xgboostFeatureNames(samples, request))
-	p50, err := native.Train(features, labels, len(labels), columns, native.TrainOptions{Rounds: 80, MaxDepth: 4, Eta: 0.1})
+	p50Options, upperOptions := xgboostTrainOptions(request)
+	p50, err := native.Train(features, labels, len(labels), columns, p50Options)
 	if err != nil {
 		return nil, nil, err
 	}
-	p95, err := native.Train(features, labels, len(labels), columns, native.TrainOptions{Rounds: 120, MaxDepth: 4, Eta: 0.08, Objective: "reg:quantileerror", QuantileAlpha: .95})
+	p95, err := native.Train(features, labels, len(labels), columns, upperOptions)
 	if err != nil {
 		p50.Close()
 		return nil, nil, err
@@ -88,13 +94,13 @@ func TrainXGBoost(samples []domain.Sample, request Request) (Model, []byte, erro
 		p95.Close()
 		return nil, nil, err
 	}
-	artifact, err := json.Marshal(xgboostArtifact{Engine: "xgboost", Format: "replicasense-xgboost-v2", FeatureSchema: xgboostFeatureSchema, P50Artifact: base64.StdEncoding.EncodeToString(p50Artifact), P95Artifact: base64.StdEncoding.EncodeToString(p95Artifact)})
+	artifact, err := json.Marshal(xgboostArtifact{Engine: "xgboost", Format: "replicasense-xgboost-v3", FeatureSchema: xgboostFeatureSchema, UpperQuantile: operationalQuantile(request), P50Artifact: base64.StdEncoding.EncodeToString(p50Artifact), P95Artifact: base64.StdEncoding.EncodeToString(p95Artifact)})
 	if err != nil {
 		p50.Close()
 		p95.Close()
 		return nil, nil, err
 	}
-	return &xgboostModel{p50: p50, p95: p95}, artifact, nil
+	return &xgboostModel{p50: p50, p95: p95, upperQuantile: operationalQuantile(request)}, artifact, nil
 }
 
 // ValidateXGBoost uses expanding windows. Each evaluation model is trained
@@ -127,10 +133,11 @@ func ValidateXGBoost(samples []domain.Sample, request Request, maxWindows int) (
 			metrics.UnderpredictionRate++
 		}
 		metrics.MeanAbsoluteError += math.Abs(prediction.P95 - actual)
+		quantile := operationalQuantile(request)
 		if actual >= prediction.P95 {
-			metrics.PinballLossP95 += .95 * (actual - prediction.P95)
+			metrics.PinballLossP95 += quantile * (actual - prediction.P95)
 		} else {
-			metrics.PinballLossP95 += .05 * (prediction.P95 - actual)
+			metrics.PinballLossP95 += (1 - quantile) * (prediction.P95 - actual)
 		}
 	}
 	if metrics.Windows == 0 {
@@ -146,7 +153,7 @@ func loadXGBoostArtifact(id string, artifactBytes []byte) (Model, error) {
 	if err := json.Unmarshal(artifactBytes, &artifact); err != nil {
 		return nil, fmt.Errorf("decode xgboost artifact %s: %w", id, err)
 	}
-	if artifact.Format != "replicasense-xgboost-v2" || artifact.FeatureSchema != xgboostFeatureSchema || artifact.P50Artifact == "" || artifact.P95Artifact == "" {
+	if artifact.Format != "replicasense-xgboost-v3" || artifact.FeatureSchema != xgboostFeatureSchema || artifact.UpperQuantile <= 0 || artifact.UpperQuantile >= 1 || artifact.P50Artifact == "" || artifact.P95Artifact == "" {
 		return nil, fmt.Errorf("invalid xgboost artifact %s", id)
 	}
 	p50Artifact, err := base64.StdEncoding.DecodeString(artifact.P50Artifact)
@@ -166,7 +173,7 @@ func loadXGBoostArtifact(id string, artifactBytes []byte) (Model, error) {
 		p50.Close()
 		return nil, fmt.Errorf("load XGBoost P95 artifact %s: %w", id, err)
 	}
-	return &xgboostModel{p50: p50, p95: p95}, nil
+	return &xgboostModel{p50: p50, p95: p95, upperQuantile: artifact.UpperQuantile}, nil
 }
 
 func (m *xgboostModel) Close() {
@@ -229,7 +236,7 @@ func newXGBoostFeatureSet(samples []domain.Sample, request Request) (xgboostFeat
 	for i := range samples {
 		points[i] = features.Point{ObservedAt: samples[i].ObservedAt, Value: samples[i].ObservedValue}
 	}
-	pipeline := features.DefaultV2(request.BusinessLocation)
+	pipeline := features.DefaultV3(request.BusinessLocation)
 	vector, err := pipeline.Build(points, len(points)-1)
 	if err != nil {
 		return xgboostFeatureSet{}, err
@@ -281,3 +288,10 @@ func horizonMaximum(samples []domain.Sample, from, steps int) float64 {
 func finite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 
 var _ = time.Second
+
+// xgboostTrainOptions is deliberately separate from TrainXGBoost so the
+// quantile contract can be tested without relying on opaque C API artifacts.
+func xgboostTrainOptions(request Request) (native.TrainOptions, native.TrainOptions) {
+	return native.TrainOptions{Rounds: 80, MaxDepth: 4, Eta: 0.1, Objective: "reg:quantileerror", QuantileAlpha: 0.50},
+		native.TrainOptions{Rounds: 120, MaxDepth: 4, Eta: 0.08, Objective: "reg:quantileerror", QuantileAlpha: operationalQuantile(request)}
+}

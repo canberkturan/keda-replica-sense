@@ -36,6 +36,10 @@ type Request struct {
 	Horizon          time.Duration
 	SamplingInterval time.Duration
 	SeasonalPeriod   time.Duration
+	// Quantile is the upper operational quantile used for predictive scaling.
+	// A zero value preserves the historical default of 0.95 for direct callers;
+	// ScaledObject parsing always supplies a strictly valid configured value.
+	Quantile float64
 	// BusinessLocation is the workload's declared IANA timezone. Candidate
 	// feature models must use it rather than the process-local timezone.
 	BusinessLocation *time.Location

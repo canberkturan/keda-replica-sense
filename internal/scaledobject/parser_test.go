@@ -101,6 +101,17 @@ func TestParseDefaultsToXGBoost(t *testing.T) {
 	}
 }
 
+func TestParseRetainsConfiguredOperationalQuantile(t *testing.T) {
+	options := ParserOptions{ClusterID: "cluster-a", ScalerAddresses: map[string]struct{}{"replicasense.default.svc:6000": {}}, DefaultMaxReplicaCount: 100}
+	result := Parse(withMetadata(validInput(), "quantile", "0.99"), options)
+	if len(result.Candidates) != 1 || result.Candidates[0].Spec == nil {
+		t.Fatalf("valid input must produce a workload: %#v", result)
+	}
+	if got := result.Candidates[0].Spec.Forecast.Quantile; got != .99 {
+		t.Fatalf("quantile = %v, want .99", got)
+	}
+}
+
 func validInput() ScaledObjectInput {
 	min, max := int32(1), int32(10)
 	return ScaledObjectInput{Namespace: "default", Name: "api", ScaleTargetName: "api", MinReplicaCount: &min, MaxReplicaCount: &max, Triggers: []TriggerInput{

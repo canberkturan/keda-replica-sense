@@ -22,9 +22,10 @@ type ModelArtifact struct {
 	Engine string `json:"engine"`
 }
 
-// Prediction represents a horizon-maximum demand distribution. The baseline
-// currently has one deterministic estimate, so its P50 and P95 are equal;
-// future quantile engines can provide distinct values without changing callers.
+// Prediction represents a horizon-maximum demand distribution. P95 remains a
+// compatibility field name for the configured upper operational quantile (not
+// necessarily literal Q0.95). The baseline has one deterministic estimate, so
+// its P50 and P95 are equal.
 type Prediction struct {
 	P50 float64
 	P95 float64
@@ -35,6 +36,13 @@ type Prediction struct {
 type Model interface {
 	Engine() string
 	PredictSamples([]domain.Sample, Request) (Prediction, error)
+}
+
+// UpperQuantileModel exposes the training quantile of a statistical artifact.
+// Model caches use it to prevent a valid-but-differently-configured artifact
+// from being served after a workload quantile change.
+type UpperQuantileModel interface {
+	OperationalQuantile() float64
 }
 
 type SeasonalBaseline struct{}

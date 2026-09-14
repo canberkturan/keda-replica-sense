@@ -34,7 +34,7 @@ func (RollingQuantile) PredictSamples(samples []domain.Sample, request Request) 
 		peaks = append(peaks, peak)
 	}
 	sort.Float64s(peaks)
-	return Prediction{P50: quantile(peaks, 0.50), P95: quantile(peaks, 0.95)}, nil
+	return Prediction{P50: quantile(peaks, 0.50), P95: quantile(peaks, operationalQuantile(request))}, nil
 }
 
 func quantile(values []float64, q float64) float64 {

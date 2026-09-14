@@ -1,6 +1,8 @@
 package features
 
 import (
+	"math"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -33,19 +35,68 @@ func TestCalendarUsesDeclaredBusinessTimezoneAndCyclicalValues(t *testing.T) {
 	}
 }
 
-func TestDefaultV2HasStableFeatureContract(t *testing.T) {
+func TestDefaultV3HasStableFeatureContract(t *testing.T) {
 	points := make([]Point, 61)
 	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := range points {
 		points[i] = Point{ObservedAt: start.Add(time.Duration(i) * time.Minute), Value: float64(i)}
 	}
-	vector, err := DefaultV2(time.UTC).Build(points, 60)
+	pipeline := DefaultV3(time.UTC)
+	vector, err := pipeline.Build(points, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"lag_60m", "rolling_std_60m", "day_of_month", "weekday_sin", "month_cos", "utc_offset_minutes"} {
+	for _, key := range []string{"lag_60m", "rolling_std_60m", "acceleration_1m", "acceleration_2m", "slope_ratio_1m_5m", "slope_ratio_2m_10m", "day_of_month", "weekday_sin", "month_cos", "utc_offset_minutes"} {
 		if _, ok := vector[key]; !ok {
 			t.Fatalf("missing %s in %#v", key, vector)
 		}
+	}
+	names, err := pipeline.Names(points, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namesAgain, err := pipeline.Names(points, 60)
+	if err != nil || !reflect.DeepEqual(names, namesAgain) {
+		t.Fatalf("feature names are not deterministic: %v %v", names, namesAgain)
+	}
+}
+
+func TestAccelerationFeaturesAreCausalFiniteAndDiscriminateTrends(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      func(int) float64
+		wantAcc1   float64
+		wantRatio1 float64
+	}{
+		{name: "constant", value: func(int) float64 { return 10 }, wantAcc1: 0, wantRatio1: 0},
+		{name: "linear", value: func(i int) float64 { return float64(i) }, wantAcc1: 0, wantRatio1: 1},
+		{name: "accelerating", value: func(i int) float64 { return float64(i * i) }, wantAcc1: 1, wantRatio1: 119.0 / 115.0},
+		{name: "declining", value: func(i int) float64 { return -float64(i) }, wantAcc1: 0, wantRatio1: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			points := make([]Point, 61)
+			for i := range points {
+				points[i] = Point{ObservedAt: time.Unix(int64(i*60), 0).UTC(), Value: test.value(i)}
+			}
+			vector, err := DefaultV3(time.UTC).Build(points, 60)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if math.Abs(vector["acceleration_1m"]-test.wantAcc1) > 1e-9 || math.Abs(vector["slope_ratio_1m_5m"]-test.wantRatio1) > 1e-9 {
+				t.Fatalf("unexpected acceleration features: %#v", vector)
+			}
+			for name, value := range vector {
+				if math.IsNaN(value) || math.IsInf(value, 0) {
+					t.Fatalf("%s is non-finite: %v", name, value)
+				}
+			}
+		})
+	}
+}
+
+func TestSafeSlopeRatioHandlesZeroDenominator(t *testing.T) {
+	if got := safeSlopeRatio(42, 0); got != 0 {
+		t.Fatalf("safeSlopeRatio = %v, want 0", got)
 	}
 }

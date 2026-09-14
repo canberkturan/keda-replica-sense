@@ -2,6 +2,7 @@
 package observability
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/canberkturan/keda-replica-sense/internal/domain"
@@ -33,7 +34,11 @@ func NewForecasterMetrics(registerer prometheus.Registerer) *ForecasterMetrics {
 func (m *ForecasterMetrics) Record(workload workloadstore.SamplingWorkload, snapshot domain.ForecastSnapshot, now time.Time) {
 	labels := []string{workload.Spec.Key.ClusterID, workload.Spec.Key.Namespace, workload.Spec.Key.ScaledObjectName, workload.Spec.Key.PredictiveTriggerName}
 	m.forecast.WithLabelValues(append(labels, "0.50")...).Set(snapshot.ForecastP50)
-	m.forecast.WithLabelValues(append(labels, "0.95")...).Set(snapshot.ForecastP95)
+	quantile := workload.Spec.Forecast.Quantile
+	if quantile <= 0 || quantile >= 1 {
+		quantile = .95
+	}
+	m.forecast.WithLabelValues(append(labels, strconv.FormatFloat(quantile, 'f', -1, 64))...).Set(snapshot.ForecastP95)
 	m.predictive.WithLabelValues(labels...).Set(snapshot.SafeDemand)
 	m.surge.WithLabelValues(labels...).Set(snapshot.SurgeDemand)
 	m.age.WithLabelValues(labels...).Set(now.Sub(snapshot.GeneratedAt).Seconds())

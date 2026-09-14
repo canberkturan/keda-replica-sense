@@ -90,6 +90,23 @@ func TestModelCacheLoadsValidModelsWhenOneArtifactIsInvalid(t *testing.T) {
 	}
 }
 
+func TestModelCacheRejectsArtifactForDifferentConfiguredQuantile(t *testing.T) {
+	cache := NewModelCache("lab", &fakeActiveModels{}, time.Hour)
+	cache.models["w1:fp"] = cachedModel{id: "m1", model: fakeQuantileModel{quantile: .95}, activatedAt: time.Now()}
+	w := workloadstore.SamplingWorkload{ID: "w1", Spec: domain.WorkloadSpec{SourceFingerprint: "fp", Forecast: domain.ForecastConfig{Quantile: .99}}}
+	if _, ok := cache.ModelFor(w); ok {
+		t.Fatal("artifact with a different configured quantile must fail closed")
+	}
+}
+
+type fakeQuantileModel struct{ quantile float64 }
+
+func (m fakeQuantileModel) Engine() string               { return "xgboost" }
+func (m fakeQuantileModel) OperationalQuantile() float64 { return m.quantile }
+func (m fakeQuantileModel) PredictSamples([]domain.Sample, forecast.Request) (forecast.Prediction, error) {
+	return forecast.Prediction{}, nil
+}
+
 type fakeActiveModels struct {
 	models []forecast.StoredModel
 	err    error

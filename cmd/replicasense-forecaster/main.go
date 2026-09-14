@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -54,9 +55,9 @@ func main() {
 	}
 	replicaReader := kube.DeploymentReplicaReader{Client: kubeClient}
 	healthChecker := kube.ClusterHealthChecker{Client: kubeClient, MaxUnschedulablePods: intEnv("REPLICASENSE_MAX_UNSCHEDULABLE_PODS", 0)}
-	capacityGuard := kube.CapacityGuard{Client: kubeClient, HeadroomFraction: floatEnv("REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION", 0.25)}
+	capacityGuard := kube.CapacityGuard{Client: kubeClient, HeadroomFraction: headroomFractionEnv("REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION", 0.25)}
 	forecastRepository := postgres.NewForecastRepository(pool)
-	budgetGuard := forecaster.SpeculativeBudgetGuard{Reader: forecastRepository, ClusterID: cluster, MaxAdditionalReplicas: floatEnv("REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET", 50)}
+	budgetGuard := forecaster.SpeculativeBudgetGuard{Reader: forecastRepository, ClusterID: cluster, MaxAdditionalReplicas: replicaBudgetEnv("REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET", 50)}
 	modelCache := forecaster.NewModelCache(cluster, postgres.NewModelRepository(pool), durationEnv("REPLICASENSE_MODEL_MAX_AGE", 72*time.Hour))
 	metricsRegistry := prometheus.NewRegistry()
 	metrics := observability.NewForecasterMetrics(metricsRegistry)
@@ -133,9 +134,20 @@ func boolEnv(name string, fallback bool) bool {
 	return fallback
 }
 
-func floatEnv(name string, fallback float64) float64 {
+func headroomFractionEnv(name string, fallback float64) float64 {
 	if raw := os.Getenv(name); raw != "" {
 		if value, err := strconv.ParseFloat(raw, 64); err == nil && value > 0 && value <= 1 {
+			return value
+		}
+	}
+	return fallback
+}
+
+// replicaBudgetEnv accepts an absolute replica count. It intentionally does
+// not share the fractional headroom parser: a budget such as 100 is valid.
+func replicaBudgetEnv(name string, fallback float64) float64 {
+	if raw := os.Getenv(name); raw != "" {
+		if value, err := strconv.ParseFloat(raw, 64); err == nil && value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) {
 			return value
 		}
 	}

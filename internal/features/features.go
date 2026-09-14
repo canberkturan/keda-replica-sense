@@ -4,6 +4,7 @@ package features
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 )
 
@@ -20,13 +21,14 @@ type Provider interface {
 
 type Pipeline struct{ Providers []Provider }
 
-// SchemaV2 identifies the first feature set suitable for feature-rich tree and
-// sequence-model experiments. Artifacts must record this exact value.
-const SchemaV2 = "demand-calendar-lag-v2"
+// SchemaV3 identifies the feature contract with causal acceleration signals.
+// Artifacts must record this exact value; a model trained with an older schema
+// is deliberately incompatible rather than being loaded with reordered input.
+const SchemaV3 = "demand-calendar-lag-v3"
 
-// DefaultV2 returns providers in their stable column-construction order.
+// DefaultV3 returns providers in their stable column-construction order.
 // Location is a workload/business timezone, never the scaler pod timezone.
-func DefaultV2(location *time.Location) Pipeline {
+func DefaultV3(location *time.Location) Pipeline {
 	return Pipeline{Providers: []Provider{
 		Historical{Lags: []int{1, 2, 5, 10, 15, 30, 60}, RollingWindows: []int{5, 15, 30, 60}},
 		Calendar{Location: location},
@@ -46,6 +48,21 @@ func (p Pipeline) Build(points []Point, index int) (Vector, error) {
 	return vector, nil
 }
 
+// Names returns the lexically ordered feature contract for a point. XGBoost
+// uses this order when materializing rows, making map-backed construction safe.
+func (p Pipeline) Names(points []Point, index int) ([]string, error) {
+	vector, err := p.Build(points, index)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(vector))
+	for name := range vector {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 type Historical struct {
 	Lags           []int
 	RollingWindows []int
@@ -61,6 +78,34 @@ func (h Historical) Append(points []Point, index int, vector Vector) error {
 		vector[fmt.Sprintf("lag_%dm", lag)] = points[index-lag].Value
 		vector[fmt.Sprintf("delta_%dm", lag)] = points[index].Value - points[index-lag].Value
 		vector[fmt.Sprintf("slope_%dm", lag)] = (points[index].Value - points[index-lag].Value) / float64(lag)
+	}
+	// Acceleration features compare slopes calculated exclusively from points
+	// available at index. They distinguish steady growth from a steepening
+	// surge without introducing future data into the feature vector. Historical
+	// remains configurable, so custom pipelines only receive signals whose lag
+	// inputs they explicitly provide.
+	hasLag := func(want int) bool {
+		for _, lag := range h.Lags {
+			if lag == want {
+				return true
+			}
+		}
+		return false
+	}
+	slope := func(minutes int) float64 {
+		return (points[index].Value - points[index-minutes].Value) / float64(minutes)
+	}
+	if hasLag(1) && hasLag(2) {
+		vector["acceleration_1m"] = slope(1) - slope(2)
+	}
+	if hasLag(2) && hasLag(5) {
+		vector["acceleration_2m"] = slope(2) - slope(5)
+	}
+	if hasLag(1) && hasLag(5) {
+		vector["slope_ratio_1m_5m"] = safeSlopeRatio(slope(1), slope(5))
+	}
+	if hasLag(2) && hasLag(10) {
+		vector["slope_ratio_2m_10m"] = safeSlopeRatio(slope(2), slope(10))
 	}
 	for _, window := range h.RollingWindows {
 		if index+1 < window {
@@ -84,6 +129,20 @@ func (h Historical) Append(points []Point, index int, vector Vector) error {
 		vector[fmt.Sprintf("rolling_std_%dm", window)] = math.Sqrt(squared / float64(window))
 	}
 	return nil
+}
+
+// safeSlopeRatio returns zero for a zero or non-finite denominator. Zero is
+// neutral and avoids manufacturing an infinite acceleration signal from flat
+// historical load.
+func safeSlopeRatio(numerator, denominator float64) float64 {
+	if denominator == 0 || math.IsNaN(denominator) || math.IsInf(denominator, 0) {
+		return 0
+	}
+	ratio := numerator / denominator
+	if math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		return 0
+	}
+	return ratio
 }
 
 // Calendar adds only information known at prediction time. Location should be

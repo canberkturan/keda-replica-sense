@@ -38,7 +38,7 @@ type TrainOptions struct {
 	QuantileAlpha float64
 }
 
-// Train fits a squared-error gradient-boosted tree model using row-major
+// Train fits the requested gradient-boosted tree objective using row-major
 // features. Each feature row has exactly columns values and one target label.
 func Train(features, labels []float32, rows, columns int, options TrainOptions) (*Model, error) {
 	if rows <= 0 || columns <= 0 {

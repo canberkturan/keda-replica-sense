@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/canberkturan/keda-replica-sense/internal/forecast"
 	"github.com/canberkturan/keda-replica-sense/internal/training"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -24,6 +26,27 @@ func (r *ModelRepository) CreateCandidate(ctx context.Context, candidate trainin
 		return "", fmt.Errorf("create model candidate: %w", err)
 	}
 	return id, nil
+}
+
+// ActiveValidation returns the immutable no-leakage validation metrics saved
+// with the currently active comparable model. A missing champion is normal.
+func (r *ModelRepository) ActiveValidation(ctx context.Context, clusterID, workloadID, sourceFingerprint string) (*forecast.ValidationMetrics, error) {
+	var raw []byte
+	err := r.database.QueryRow(ctx, `SELECT validation_metrics->'walk_forward' FROM models WHERE cluster_id=$1 AND workload_id=$2 AND source_fingerprint=$3 AND status='active'`, clusterID, workloadID, sourceFingerprint).Scan(&raw)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load active model validation: %w", err)
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var metrics forecast.ValidationMetrics
+	if err := json.Unmarshal(raw, &metrics); err != nil {
+		return nil, fmt.Errorf("decode active model validation: %w", err)
+	}
+	return &metrics, nil
 }
 
 func (r *ModelRepository) ListActiveModels(ctx context.Context, clusterID string) ([]forecast.StoredModel, error) {

@@ -101,8 +101,14 @@ triggers:
       forecastHorizon: 8m
       samplingInterval: 1m
       trainingWindow: 30d
+      # Q0.50 is always trained as the median. This is the upper operational
+      # quantile used for predictive capacity, and must be strictly (0, 1).
+      quantile: "0.95"
       businessTimezone: Europe/Istanbul
       modelEngine: xgboost
+      # Surge extrapolation reaches only until new pods are useful.
+      startupLatency: 90s
+      safetyBuffer: 30s
 ```
 
 The controller accepts only HTTP(S) Prometheus URLs without embedded
@@ -117,7 +123,11 @@ can create or alter ScaledObjects.
 - The trainer Job reads the database URL from a Kubernetes Secret and does not
   mount a Kubernetes API token.
 - The training scheduler creates Trainer Jobs, and each successful validated
-  model is automatically activated. Users do not create or promote Jobs.
+  model is stored as an immutable candidate. It is activated only when its
+  walk-forward coverage and underprediction meet safety limits and it is no
+  worse than the active champion (or, with no champion, the deterministic
+  seasonal baseline). Rejected candidates and their promotion reason remain
+  in the model validation metadata; users do not create or promote Jobs.
 - The chart runs components as non-root with a read-only root filesystem,
   dropped capabilities, RuntimeDefault seccomp, scaler anti-affinity, and a
   PodDisruptionBudget.
@@ -132,3 +142,27 @@ can create or alter ScaledObjects.
 - Monitor sampler query errors, snapshot age, predictive metric values, KEDA
   HPA events, database capacity, and scaler endpoint availability with your
   existing monitoring system.
+- `REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION` remains a fraction strictly in
+  `(0,1]`. `REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET` is different: it
+  is a positive absolute replica count, so values such as `100` are valid.
+
+## Forecast and model semantics
+
+- The `quantile` metadata value is the upper operational quantile. It defaults
+  to `0.95`, must be strictly between zero and one, and is used consistently
+  for XGBoost training and walk-forward pinball loss. The persisted field name
+  `ForecastP95` / `forecast_p95` is retained for compatibility even when the
+  configured value is not `0.95`.
+- Native XGBoost trains P50 using `reg:quantileerror` with alpha `0.50`, and
+  trains the upper bound with the configured alpha. It does not treat a
+  squared-error estimate as a median.
+- The native feature schema is `demand-calendar-lag-v3`. It adds causal
+  acceleration and slope-ratio inputs; V2 model artifacts are intentionally
+  rejected and the workload fails closed to its existing reactive KEDA path
+  until a V3 candidate is promoted.
+- Deterministic surge detection is independent of ML output. Its lead time is
+  `startupLatency + safetyBuffer`; if both are omitted, ReplicaSense uses the
+  documented conservative two-minute fallback. It never extrapolates over the
+  full ML forecast horizon.
+- CI verifies the portable Go build and runs `go test -tags xgboost ./...`
+  inside the reproducible `Dockerfile.xgboost` native-library environment.

@@ -33,6 +33,7 @@ helm upgrade --install replicasense oci://ghcr.io/canberkturan/charts/replicasen
 
 The chart defaults to matching immutable release tags, with native XGBoost
 images for the forecaster and internally-created Trainer Jobs. A successful
-validated training run automatically activates its model; users do not create
+training run stores an immutable candidate; it is activated only after the
+promotion policy accepts its no-leakage validation results. Users do not create
 or promote Jobs. For a private GHCR package, authenticate first with `helm
 registry login ghcr.io` using a token that has `read:packages` permission.

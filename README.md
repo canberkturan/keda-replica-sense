@@ -13,14 +13,17 @@ expectations.
 - Watches KEDA `ScaledObject` resources and derives predictive contracts from
   named native Prometheus triggers.
 - Samples and backfills Prometheus data into PostgreSQL with idempotent writes.
-- Produces XGBoost horizon-maximum forecasts, deterministic surge detection,
+- Produces XGBoost horizon-maximum quantile forecasts (true Q0.50 and a
+  configured upper operational quantile), deterministic surge detection,
   rate limits, headroom, and cluster-wide speculative budget guards.
 - Serves fresh, safety-approved predictive demand to KEDA through an
   in-memory external-scaler cache.
 - Stores/evaluates snapshots; evaluates coverage, underprediction, MAE, and
   P95 pinball loss with walk-forward validation.
-- Schedules, validates, and automatically activates per-workload XGBoost
-  models through Kubernetes Trainer Jobs and PostgreSQL model artifacts.
+- Schedules, validates, stores, and promotes per-workload XGBoost models
+  through Kubernetes Trainer Jobs and PostgreSQL model artifacts. Promotion
+  requires safety thresholds plus a comparison with an active champion or the
+  deterministic baseline; rejected candidates remain auditable.
 
 ## Install
 
@@ -33,10 +36,7 @@ helm upgrade --install replicasense ./charts/replicasense \
 ```
 
 Create the required database URL Secret before installation; KEDA, Prometheus
-Operator, and PostgreSQL are external production dependencies. The complete
-product plan is in [docs/project-plan.md](docs/project-plan.md); current
-evidence and known limitations are in
-[docs/acceptance-criteria.md](docs/acceptance-criteria.md).
+Operator, and PostgreSQL are external production dependencies.
 
 For a production-style install with an externally managed PostgreSQL database,
 use [charts/replicasense](charts/replicasense/README.md). The chart requires a
@@ -49,6 +49,9 @@ operations flow is in [docs/enterprise-installation.md](docs/enterprise-installa
 forecaster and Trainer Job images. The native engine is enabled only in images
 built with the explicit `xgboost` build tag; portable images remain available
 for explicitly configured baseline and rolling-quantile engines.
+
+The CI workflow verifies both the portable build and `go test -tags xgboost
+./...` inside this reproducible native XGBoost build environment.
 
 ## Safety boundary
 

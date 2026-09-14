@@ -75,7 +75,7 @@ func (s Service) Forecast(ctx context.Context, workload workloadstore.SamplingWo
 	if err != nil {
 		return domain.ForecastSnapshot{}, fmt.Errorf("load workload business timezone: %w", err)
 	}
-	prediction, err := model.PredictSamples(samples, forecast.Request{Horizon: decisionHorizon, SamplingInterval: interval, SeasonalPeriod: period, BusinessLocation: location})
+	prediction, err := model.PredictSamples(samples, forecast.Request{Horizon: decisionHorizon, SamplingInterval: interval, SeasonalPeriod: period, Quantile: workload.Spec.Forecast.Quantile, BusinessLocation: location})
 	if err != nil {
 		return domain.ForecastSnapshot{}, err
 	}
@@ -87,7 +87,7 @@ func (s Service) Forecast(ctx context.Context, workload workloadstore.SamplingWo
 	}
 	surge := safety.SurgeResult{}
 	if !s.DisableSurgeDetection {
-		surge = detectSurge(samples, interval)
+		surge = detectSurge(samples, interval, surgeLeadTime(workload.Spec.Forecast))
 	}
 	raw := prediction.P95
 	surgeDemand := 0.0
@@ -136,7 +136,19 @@ func (s Service) Forecast(ctx context.Context, workload workloadstore.SamplingWo
 	return snapshot, nil
 }
 
-func detectSurge(samples []domain.Sample, interval time.Duration) safety.SurgeResult {
+const defaultSurgeLeadTime = 2 * time.Minute
+
+// surgeLeadTime is limited to when a newly requested replica can become
+// useful. It is intentionally independent of the ML forecast horizon.
+func surgeLeadTime(config domain.ForecastConfig) time.Duration {
+	leadTime := config.StartupLatency + config.SafetyBuffer
+	if leadTime <= 0 {
+		return defaultSurgeLeadTime
+	}
+	return leadTime
+}
+
+func detectSurge(samples []domain.Sample, interval, leadTime time.Duration) safety.SurgeResult {
 	if len(samples) < 6 || interval <= 0 {
 		return safety.SurgeResult{}
 	}
@@ -157,5 +169,5 @@ func detectSurge(samples []domain.Sample, interval time.Duration) safety.SurgeRe
 	baseline /= 5
 	last := samples[len(samples)-1].ObservedValue
 	previous := samples[len(samples)-2].ObservedValue
-	return safety.DetectSurge(safety.SurgeInput{CurrentValue: last, RecentBaseline: baseline, CurrentSlopePerMinute: (last - previous) / minutes, HistoricalSlopeP95: p95, LeadTimeMinutes: 2, MaxMultiplier: 2})
+	return safety.DetectSurge(safety.SurgeInput{CurrentValue: last, RecentBaseline: baseline, CurrentSlopePerMinute: (last - previous) / minutes, HistoricalSlopeP95: p95, LeadTimeMinutes: leadTime.Minutes(), MaxMultiplier: 2})
 }

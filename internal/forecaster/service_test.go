@@ -101,3 +101,38 @@ func TestForecastCanDisableSurgeDetectionForModelEvaluation(t *testing.T) {
 		t.Fatalf("Forecast() = %#v", got)
 	}
 }
+
+func TestDetectSurgeUsesWorkloadAwareLeadTime(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	values := []float64{1, 1, 1, 1, 4, 5}
+	samples := make([]domain.Sample, len(values))
+	for i, value := range values {
+		samples[i] = domain.Sample{ObservedAt: start.Add(time.Duration(i) * time.Minute), ObservedValue: value}
+	}
+	tests := []struct {
+		name string
+		lead time.Duration
+		want float64
+	}{
+		{name: "30 second startup", lead: 30 * time.Second, want: 5.5},
+		{name: "two minute startup", lead: 2 * time.Minute, want: 7},
+		{name: "five minute startup", lead: 5 * time.Minute, want: 10},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := detectSurge(samples, time.Minute, test.lead)
+			if !got.Triggered || got.Demand != test.want {
+				t.Fatalf("surge = %#v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSurgeLeadTimeUsesStartupLatencyAndSafetyBuffer(t *testing.T) {
+	if got := surgeLeadTime(domain.ForecastConfig{StartupLatency: 30 * time.Second, SafetyBuffer: 15 * time.Second}); got != 45*time.Second {
+		t.Fatalf("lead time = %s", got)
+	}
+	if got := surgeLeadTime(domain.ForecastConfig{}); got != defaultSurgeLeadTime {
+		t.Fatalf("fallback lead time = %s", got)
+	}
+}

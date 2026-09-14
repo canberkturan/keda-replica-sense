@@ -13,7 +13,9 @@ type ForecastSnapshot struct {
 	ModelEngine       string
 	ForecastHorizon   time.Duration
 	ForecastP50       float64
-	ForecastP95       float64
+	// ForecastP95 is retained for storage/API compatibility and represents the
+	// workload's configured upper operational quantile, not always literal Q95.
+	ForecastP95 float64
 	// SurgeDemand is a deterministic, short-term anomaly projection in demand
 	// units. It is zero when the surge controller is inactive and is kept
 	// separate from ForecastP95 so model evaluation remains statistically pure.
