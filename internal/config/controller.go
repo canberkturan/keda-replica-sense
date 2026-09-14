@@ -5,18 +5,21 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/canberkturan/keda-replica-sense/internal/scaledobject"
 )
 
 type Controller struct {
-	Parser                  scaledobject.ParserOptions
-	MetricsBindAddress      string
-	HealthProbeBindAddress  string
-	LeaderElection          bool
-	LeaderElectionID        string
-	LeaderElectionNamespace string
-	DatabaseURL             string
+	Parser                    scaledobject.ParserOptions
+	MetricsBindAddress        string
+	HealthProbeBindAddress    string
+	LeaderElection            bool
+	LeaderElectionID          string
+	LeaderElectionNamespace   string
+	SystemNamespace           string
+	TrainerJobCleanupInterval time.Duration
+	DatabaseURL               string
 }
 
 // LoadController reads controller configuration from an environment lookup
@@ -41,6 +44,16 @@ func LoadController(lookup func(string) string) (Controller, error) {
 		return Controller{}, fmt.Errorf("REPLICASENSE_LEADER_ELECTION: %w", err)
 	}
 
+	leaderElectionNamespace := strings.TrimSpace(lookup("REPLICASENSE_LEADER_ELECTION_NAMESPACE"))
+	systemNamespace := valueOrDefault(lookup("REPLICASENSE_SYSTEM_NAMESPACE"), leaderElectionNamespace)
+	if systemNamespace == "" {
+		systemNamespace = "replicasense-system"
+	}
+	cleanupInterval, err := durationWithDefault(lookup("REPLICASENSE_TRAINER_JOB_CLEANUP_INTERVAL"), 24*time.Hour)
+	if err != nil {
+		return Controller{}, fmt.Errorf("REPLICASENSE_TRAINER_JOB_CLEANUP_INTERVAL: %w", err)
+	}
+
 	return Controller{
 		Parser: scaledobject.ParserOptions{
 			ClusterID:              clusterID,
@@ -48,13 +61,26 @@ func LoadController(lookup func(string) string) (Controller, error) {
 			DefaultMinReplicaCount: 0,
 			DefaultMaxReplicaCount: 100,
 		},
-		MetricsBindAddress:      valueOrDefault(lookup("REPLICASENSE_METRICS_BIND_ADDRESS"), ":8080"),
-		HealthProbeBindAddress:  valueOrDefault(lookup("REPLICASENSE_HEALTH_PROBE_BIND_ADDRESS"), ":8081"),
-		LeaderElection:          leaderElection,
-		LeaderElectionID:        valueOrDefault(lookup("REPLICASENSE_LEADER_ELECTION_ID"), "replicasense-controller.keda.sh"),
-		LeaderElectionNamespace: strings.TrimSpace(lookup("REPLICASENSE_LEADER_ELECTION_NAMESPACE")),
-		DatabaseURL:             databaseURL,
+		MetricsBindAddress:        valueOrDefault(lookup("REPLICASENSE_METRICS_BIND_ADDRESS"), ":8080"),
+		HealthProbeBindAddress:    valueOrDefault(lookup("REPLICASENSE_HEALTH_PROBE_BIND_ADDRESS"), ":8081"),
+		LeaderElection:            leaderElection,
+		LeaderElectionID:          valueOrDefault(lookup("REPLICASENSE_LEADER_ELECTION_ID"), "replicasense-controller.keda.sh"),
+		LeaderElectionNamespace:   leaderElectionNamespace,
+		SystemNamespace:           systemNamespace,
+		TrainerJobCleanupInterval: cleanupInterval,
+		DatabaseURL:               databaseURL,
 	}, nil
+}
+
+func durationWithDefault(raw string, fallback time.Duration) (time.Duration, error) {
+	if strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+	value, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("must be a positive duration")
+	}
+	return value, nil
 }
 
 func parseCommaSeparatedSet(raw string) (map[string]struct{}, error) {

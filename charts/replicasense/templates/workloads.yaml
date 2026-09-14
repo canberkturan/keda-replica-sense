@@ -53,6 +53,8 @@ spec:
                   name: {{ $root.Values.database.existingSecret | quote }}
                   key: {{ $root.Values.database.urlKey | quote }}
             {{- if eq $component "controller" }}
+            - name: REPLICASENSE_SYSTEM_NAMESPACE
+              value: {{ $root.Release.Namespace | quote }}
             - name: REPLICASENSE_SCALER_ADDRESSES
               value: {{ printf "%s.%s.svc:%v" (include "replicasense.componentName" (dict "root" $root "component" "scaler")) $root.Release.Namespace $root.Values.scaler.service.port | quote }}
             - name: REPLICASENSE_LEADER_ELECTION

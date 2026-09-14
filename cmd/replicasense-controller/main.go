@@ -78,6 +78,16 @@ func main() {
 		log.Error(err, "set up ScaledObject controller")
 		os.Exit(1)
 	}
+	if err := manager.Add(controller.TrainerJobCleaner{
+		Reader:    manager.GetAPIReader(),
+		Writer:    manager.GetClient(),
+		Namespace: configuration.SystemNamespace,
+		Interval:  configuration.TrainerJobCleanupInterval,
+		Log:       log.WithName("trainer-job-cleanup"),
+	}); err != nil {
+		log.Error(err, "set up trainer Job cleanup")
+		os.Exit(1)
+	}
 	if err := manager.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		log.Error(err, "add health check")
 		os.Exit(1)

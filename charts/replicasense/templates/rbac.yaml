@@ -32,6 +32,25 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller-trainer-job-cleanup") }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller-trainer-job-cleanup") }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "replicasense.componentName" (dict "root" . "component" "controller-trainer-job-cleanup") }}}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: {{ include "replicasense.componentName" (dict "root" . "component" "controller-leader-election") }}
 rules:
   - apiGroups: ["coordination.k8s.io"]

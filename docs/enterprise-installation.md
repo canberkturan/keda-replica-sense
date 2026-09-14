@@ -17,11 +17,11 @@ checks.
 ## 1. Publish a release
 
 GitHub Actions publishes to GHCR only when a Git tag matches the chart version.
-If the `Chart.yaml` version is `0.2.3`, the tag must be `v0.2.3`.
+If the `Chart.yaml` version is `0.2.4`, the tag must be `v0.2.4`.
 
 ```bash
-git tag -a v0.2.3 -m "ReplicaSense 0.2.3"
-git push origin v0.2.3
+git tag -a v0.2.4 -m "ReplicaSense 0.2.4"
+git push origin v0.2.4
 ```
 
 The workflow publishes runtime images under
@@ -69,7 +69,7 @@ Use an immutable chart version and a stable cluster identifier.
 helm registry login ghcr.io
 helm upgrade --install replicasense \
   oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.2.3 \
+  --version 0.2.4 \
   --namespace replicasense-system \
   --set clusterID=production-cluster-1 \
   --set imagePullSecrets[0].name=ghcr-pull
@@ -128,6 +128,10 @@ can create or alter ScaledObjects.
   worse than the active champion (or, with no champion, the deterministic
   seasonal baseline). Rejected candidates and their promotion reason remain
   in the model validation metadata; users do not create or promote Jobs.
+- The elected controller removes terminal ReplicaSense trainer Jobs at startup
+  and every 24 hours. It deletes only Jobs labeled `app=replicasense-trainer`;
+  active Jobs and unrelated batch workloads are never touched. Override the
+  interval with `components.controller.env.REPLICASENSE_TRAINER_JOB_CLEANUP_INTERVAL`.
 - The chart runs components as non-root with a read-only root filesystem,
   dropped capabilities, RuntimeDefault seccomp, scaler anti-affinity, and a
   PodDisruptionBudget.
