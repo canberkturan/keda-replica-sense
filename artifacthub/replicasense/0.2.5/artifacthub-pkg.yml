@@ -1,6 +1,6 @@
 version: 0.2.5
-name: replicasense
-alternativeName: replicasense-scaler
+name: replica-sense
+alternativeName: keda-replica-sense
 category: ai-machine-learning
 displayName: ReplicaSense
 createdAt: "2026-09-14T19:41:49Z"
