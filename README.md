@@ -1,3 +1,4 @@
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/keda-replica-sense)](https://artifacthub.io/packages/search?repo=keda-replica-sense)
 # ReplicaSense
 
 ReplicaSense is a self-hosted, KEDA-native predictive autoscaling extension for

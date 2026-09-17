@@ -15,3 +15,26 @@ sources:
   - https://github.com/canberkturan/keda-replica-sense
 maintainers:
   - name: Canberk TURAN
+annotations:
+  artifacthub.io/category: ai-machine-learning
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Source
+      url: https://github.com/canberkturan/keda-replica-sense
+    - name: Documentation
+      url: https://github.com/canberkturan/keda-replica-sense/tree/main/docs
+    - name: Support
+      url: https://github.com/canberkturan/keda-replica-sense/issues
+  artifacthub.io/images: |
+    - name: Controller
+      image: ghcr.io/canberkturan/replicasense-controller:0.2.5
+    - name: Sampler
+      image: ghcr.io/canberkturan/replicasense-sampler:0.2.5
+    - name: External scaler
+      image: ghcr.io/canberkturan/replicasense-scaler:0.2.5
+    - name: XGBoost forecaster
+      image: ghcr.io/canberkturan/replicasense-forecaster:0.2.5-xgboost
+    - name: XGBoost trainer
+      image: ghcr.io/canberkturan/replicasense-trainer:0.2.5-xgboost
+    - name: Training scheduler
+      image: ghcr.io/canberkturan/replicasense-training-scheduler:0.2.5

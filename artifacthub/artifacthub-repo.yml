@@ -1,0 +1,5 @@
+# Artifact Hub repository metadata for the KEDA Scalers repository rooted here.
+# Artifact Hub uses the owners entry to support repository ownership claims.
+owners:
+  - name: Canberk TURAN
+    email: canberkkturann@gmail.com
