@@ -39,12 +39,14 @@ helm upgrade --install replicasense ./charts/replicasense \
 Create the required database URL Secret before installation; KEDA, Prometheus
 Operator, and PostgreSQL are external production dependencies.
 
-For a production-style install with an externally managed PostgreSQL database,
+For a published-chart install with an externally managed PostgreSQL database,
 use [charts/replicasense](charts/replicasense/README.md). The chart requires a
 database URL Secret and intentionally does not install KEDA or PostgreSQL.
 
-The complete release, database bootstrap, Helm installation, workload, and
-operations flow is in [docs/enterprise-installation.md](docs/enterprise-installation.md).
+The complete database bootstrap, Helm installation, workload setup, and
+operations flow is in the [installation guide](docs/enterprise-installation.md).
+See the [metrics reference](docs/metrics.md) for Prometheus metric meanings,
+labels, dashboard queries, and alerting guidance.
 
 `Dockerfile.xgboost` is the reproducible image foundation for the default
 forecaster and Trainer Job images. The native engine is enabled only in images

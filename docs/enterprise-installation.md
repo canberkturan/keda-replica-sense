@@ -1,89 +1,100 @@
-# ReplicaSense Enterprise Installation
+# Install and operate ReplicaSense
 
-ReplicaSense does not replace KEDA's native reactive triggers. The Prometheus
-trigger remains the availability path; the predictive metric recommends
-additional capacity only when forecast data is fresh and has passed safety
-checks.
+ReplicaSense works with any Kubernetes environment that has KEDA, Prometheus,
+and PostgreSQL. It can be used by a single application team, a platform team,
+or a larger production environment. Keep KEDA's native reactive trigger, then
+add ReplicaSense as a separate predictive trigger.
 
-## Prerequisites
+ReplicaSense does not replace KEDA. If a prediction is unavailable, stale, or
+unsafe, its predictive metric returns zero while the native KEDA trigger keeps
+reactive scaling available.
+
+## Before you begin
+
+You need:
 
 - Kubernetes 1.28 or later and KEDA 2.x.
-- Prometheus that collects application metrics and is reachable by both KEDA
-  and the ReplicaSense sampler.
-- A PostgreSQL database dedicated to ReplicaSense and protected with TLS.
-- A registry token with `read:packages` permission if the GHCR packages are
-  private.
+- Helm 3.13 or later.
+- Prometheus reachable by KEDA and the ReplicaSense sampler.
+- A PostgreSQL database for ReplicaSense. TLS is recommended for every
+  networked deployment.
+- Permission to create a namespace, Secrets, Deployments, Services, and KEDA
+  `ScaledObject` resources.
 
-## 1. Publish a release
+The chart does not install KEDA, Prometheus, or PostgreSQL. This keeps those
+shared platform services under the control of their normal operators.
 
-GitHub Actions publishes to GHCR only when a Git tag matches the chart version.
-If the `Chart.yaml` version is `0.2.5`, the tag must be `v0.2.5`.
+## 1. Prepare PostgreSQL
 
-```bash
-git tag -a v0.2.5 -m "ReplicaSense 0.2.5"
-git push origin v0.2.5
-```
-
-The workflow publishes runtime images under
-`ghcr.io/canberkturan/replicasense-*` and the chart under
-`oci://ghcr.io/canberkturan/charts/replicasense`.
-
-## 2. Create the database schema
-
-Apply the bootstrap schema once to a new, empty database with the database-owner
-role. This file is not an idempotent upgrade tool and must not be run again
-against an existing database.
+Apply the bootstrap schema once to a new, empty database with a database-owner
+role. It is not an idempotent upgrade tool; do not rerun it against an existing
+ReplicaSense database.
 
 ```bash
 psql "$REPLICASENSE_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/schema.sql
 ```
 
-Use a separate, least-privileged PostgreSQL account for runtime components. Its
-connection URL must include `sslmode=require`, or your organization's
-equivalent TLS policy.
+Create a separate runtime account with the least privileges needed by the
+application. Use a PostgreSQL connection URL that enforces your TLS policy,
+for example `sslmode=require`.
 
-## 3. Create Kubernetes secrets
-
-If the GHCR packages are private, create an image-pull Secret and a separate
-Secret for the database.
+## 2. Create the namespace and database Secret
 
 ```bash
 kubectl create namespace replicasense-system
 kubectl -n replicasense-system create secret generic replicasense-database \
   --from-literal=url='postgres://USER:PASSWORD@HOST:5432/replicasense?sslmode=require'
-
-kubectl -n replicasense-system create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io \
-  --docker-username=GITHUB_USER \
-  --docker-password=GHCR_READ_TOKEN
 ```
 
-Add `ghcr-pull` as an image pull secret through your organization Helm values
-overlay if the Kubernetes ServiceAccount policy requires it.
-
-## 4. Install from GHCR
-
-Use an immutable chart version and a stable cluster identifier.
+If you use private container images, also create an image-pull Secret and pass
+it through `imagePullSecrets`. Public GHCR images need no registry credentials.
 
 ```bash
-helm registry login ghcr.io
-helm upgrade --install replicasense \
-  oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.2.5 \
-  --namespace replicasense-system \
-  --set clusterID=production-cluster-1 \
-  --set imagePullSecrets[0].name=ghcr-pull
+kubectl -n replicasense-system create secret docker-registry registry-pull \
+  --docker-server=REGISTRY_HOST \
+  --docker-username=REGISTRY_USER \
+  --docker-password=REGISTRY_TOKEN
 ```
 
-If Prometheus Operator is not installed, add
-`--set serviceMonitor.enabled=false`.
+## 3. Install the chart
 
-## 5. Connect a workload
+Install the published OCI chart with a stable cluster identifier. The identifier
+is a label value used to separate metrics and stored forecasts from other
+clusters; it does not need to be globally public.
 
-A workload keeps its native KEDA Prometheus trigger and adds a named
-ReplicaSense external trigger that references it. The application team owns the
-Prometheus query and reactive threshold; ReplicaSense stores the derived
-forecast contract and samples only that metric.
+```bash
+helm upgrade --install replicasense \
+  oci://ghcr.io/canberkturan/charts/replicasense \
+  --version 0.2.6 \
+  --namespace replicasense-system \
+  --set clusterID=cluster-east-1
+```
+
+For a private registry, add:
+
+```bash
+--set imagePullSecrets[0].name=registry-pull
+```
+
+The chart creates Prometheus Operator `ServiceMonitor` resources by default.
+If your Prometheus installation does not use that operator, disable them with
+`--set serviceMonitor.enabled=false` and configure scraping for the sampler and
+forecaster Services yourself.
+
+Check the rollout:
+
+```bash
+kubectl -n replicasense-system get deploy,pod,svc
+kubectl -n replicasense-system rollout status deployment/replicasense-controller
+kubectl -n replicasense-system rollout status deployment/replicasense-scaler
+```
+
+## 4. Add a predictive trigger to a workload
+
+Keep a named native Prometheus trigger and add a ReplicaSense external trigger
+that names it through `sourceTrigger`. The reactive trigger and its threshold
+remain the application's availability path; ReplicaSense derives its forecast
+contract from the same metric.
 
 ```yaml
 triggers:
@@ -101,72 +112,48 @@ triggers:
       forecastHorizon: 8m
       samplingInterval: 1m
       trainingWindow: 30d
-      # Q0.50 is always trained as the median. This is the upper operational
-      # quantile used for predictive capacity, and must be strictly (0, 1).
       quantile: "0.95"
-      businessTimezone: Europe/Istanbul
+      businessTimezone: UTC
       modelEngine: xgboost
-      # Surge extrapolation reaches only until new pods are useful.
       startupLatency: 90s
       safetyBuffer: 30s
 ```
 
-The controller accepts only HTTP(S) Prometheus URLs without embedded
-credentials. Use Kubernetes network policy and namespace RBAC to restrict who
-can create or alter ScaledObjects.
+Use a timezone that matches the workload's business cycle. XGBoost is the
+default model engine. After a workload is changed to XGBoost, prediction stays
+fail-closed until its first validated model is active; the native KEDA trigger
+continues to work during that period.
 
-## Operations and security
+## 5. Observe and operate
 
-- Keep KEDA's native Prometheus trigger in every predictive ScaledObject.
-- Use immutable image digests in a production values overlay after the release
-  is approved.
-- The trainer Job reads the database URL from a Kubernetes Secret and does not
-  mount a Kubernetes API token.
-- The training scheduler creates Trainer Jobs, and each successful validated
-  model is stored as an immutable candidate. It is activated only when its
-  walk-forward coverage and underprediction meet safety limits and it is no
-  worse than the active champion (or, with no champion, the deterministic
-  seasonal baseline). Rejected candidates and their promotion reason remain
-  in the model validation metadata; users do not create or promote Jobs.
-- The elected controller removes terminal ReplicaSense trainer Jobs at startup
-  and every 24 hours. It deletes only Jobs labeled `app=replicasense-trainer`;
-  active Jobs and unrelated batch workloads are never touched. Override the
-  interval with `components.controller.env.REPLICASENSE_TRAINER_JOB_CLEANUP_INTERVAL`.
-- The chart runs components as non-root with a read-only root filesystem,
-  dropped capabilities, RuntimeDefault seccomp, scaler anti-affinity, and a
-  PodDisruptionBudget.
-- Native XGBoost is the default. The chart uses matching `VERSION-xgboost`
-  forecaster and trainer images; use another model engine only as an explicit
-  workload configuration.
-- A predictive trigger without `modelEngine` now defaults to `xgboost`.
-  Existing workloads that must retain the prior behavior must explicitly set
-  `modelEngine: seasonal-baseline`. After a workload changes to XGBoost, its
-  predictive metric fails closed until the first validated model is active;
-  its native KEDA reactive trigger continues to operate.
-- Monitor sampler query errors, snapshot age, predictive metric values, KEDA
-  HPA events, database capacity, and scaler endpoint availability with your
-  existing monitoring system.
-- `REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION` remains a fraction strictly in
-  `(0,1]`. `REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET` is different: it
-  is a positive absolute replica count, so values such as `100` are valid.
+Start with the [metrics reference](metrics.md). It explains the source-demand,
+forecast, surge, safe-replica, snapshot-age, and model metrics exposed by the
+sampler and forecaster.
 
-## Forecast and model semantics
+```bash
+kubectl -n replicasense-system get scaledobjects,keda,svc
+kubectl -n replicasense-system logs deployment/replicasense-sampler --tail=100
+kubectl -n replicasense-system logs deployment/replicasense-forecaster --tail=100
+```
 
-- The `quantile` metadata value is the upper operational quantile. It defaults
-  to `0.95`, must be strictly between zero and one, and is used consistently
-  for XGBoost training and walk-forward pinball loss. The persisted field name
-  `ForecastP95` / `forecast_p95` is retained for compatibility even when the
-  configured value is not `0.95`.
-- Native XGBoost trains P50 using `reg:quantileerror` with alpha `0.50`, and
-  trains the upper bound with the configured alpha. It does not treat a
-  squared-error estimate as a median.
-- The native feature schema is `demand-calendar-lag-v3`. It adds causal
-  acceleration and slope-ratio inputs; V2 model artifacts are intentionally
-  rejected and the workload fails closed to its existing reactive KEDA path
-  until a V3 candidate is promoted.
-- Deterministic surge detection is independent of ML output. Its lead time is
-  `startupLatency + safetyBuffer`; if both are omitted, ReplicaSense uses the
-  documented conservative two-minute fallback. It never extrapolates over the
-  full ML forecast horizon.
-- CI verifies the portable Go build and runs `go test -tags xgboost ./...`
-  inside the reproducible `Dockerfile.xgboost` native-library environment.
+For production hardening, use image digests after release approval, restrict
+who can change `ScaledObject` resources, apply NetworkPolicies appropriate to
+your cluster, and monitor database capacity and scaler endpoint availability.
+The chart runs containers as non-root with a read-only root filesystem, dropped
+Linux capabilities, and RuntimeDefault seccomp.
+
+The training scheduler creates and cleans up ReplicaSense-labeled Trainer Jobs.
+Users do not need to create or promote Jobs manually. Successful candidates are
+validated before promotion; rejected candidates stay auditable in PostgreSQL.
+
+## Safety behavior and limits
+
+- Keep the native Prometheus trigger on every predictive `ScaledObject`.
+- The external metric uses a target of one, so the safe predictive value is a
+  desired replica recommendation, subject to KEDA/HPA bounds and behavior.
+- Surge detection is deterministic and independent of the ML forecast. It acts
+  only for the time a new pod needs to become useful, not for the whole ML
+  horizon.
+- If every external-scaler Service endpoint is unavailable, KEDA cannot obtain
+  that external metric. Restore a scaler endpoint; the combined `ScaledObject`
+  cannot use its reactive path during this KEDA discovery failure.
