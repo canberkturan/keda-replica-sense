@@ -22,7 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Compile and test every package with native XGBoost
+      - name: Build and test the native XGBoost runtime image
         run: >-
-          docker build --target build --file Dockerfile.xgboost
-          --build-arg COMMAND=replicasense-forecaster .
+          docker build --file Dockerfile.xgboost
+          --build-arg COMMAND=replicasense-forecaster
+          --tag replicasense-forecaster:ci .
+      - name: Verify XGBoost libraries load in the final image
+        run: |
+          result="$(docker run --rm replicasense-forecaster:ci 2>&1 || true)"
+          test "$result" = "REPLICASENSE_CLUSTER_ID and REPLICASENSE_DATABASE_URL are required"

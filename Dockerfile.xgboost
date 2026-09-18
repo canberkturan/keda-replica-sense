@@ -14,7 +14,7 @@ RUN curl -fsSL "https://github.com/dmlc/xgboost/archive/refs/tags/${XGBOOST_VERS
     && tar -xzf /tmp/dmlc-core.tar.gz --strip-components=1 -C /src/xgboost/dmlc-core \
     && curl -fsSL "https://github.com/rapidsai/gputreeshap/archive/${GPUTREESHAP_COMMIT}.tar.gz" -o /tmp/gputreeshap.tar.gz \
     && tar -xzf /tmp/gputreeshap.tar.gz --strip-components=1 -C /src/xgboost/gputreeshap \
-    && cmake -S /src/xgboost -B /src/xgboost/build -DBUILD_SHARED_LIBS=ON -DUSE_OPENMP=OFF \
+    && cmake -S /src/xgboost -B /src/xgboost/build -DBUILD_SHARED_LIBS=ON -DUSE_OPENMP=OFF -DCMAKE_INSTALL_RPATH='$ORIGIN' \
     && cmake --build /src/xgboost/build -j2 \
     && cmake --install /src/xgboost/build --prefix /opt/xgboost \
     && ln -sf libdmlc.so.0.3 /opt/xgboost/lib/libdmlc.so.0
@@ -26,14 +26,19 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=xgboost /opt/xgboost /opt/xgboost
-ENV CGO_ENABLED=1 CGO_CFLAGS=-I/opt/xgboost/include CGO_LDFLAGS="-L/opt/xgboost/lib -Wl,-rpath-link,/opt/xgboost/lib"
+ENV CGO_ENABLED=1 CGO_CFLAGS=-I/opt/xgboost/include CGO_LDFLAGS="-L/opt/xgboost/lib -Wl,-rpath-link,/opt/xgboost/lib -Wl,-rpath,/usr/local/lib"
 RUN LD_LIBRARY_PATH=/opt/xgboost/lib go test -tags xgboost ./...
 RUN go build -tags xgboost -buildvcs=false -trimpath -o /replicasense ./cmd/${COMMAND}
 
-FROM debian:bookworm-slim
+# The XGBoost shared libraries require the C/C++ runtime, but do not require a
+# shell, package manager, or the broad Debian utility set. Distroless keeps the
+# final attack surface to those runtime libraries only.
+FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=xgboost /opt/xgboost/lib/libxgboost.so /usr/local/lib/libxgboost.so
 COPY --from=xgboost /opt/xgboost/lib/libdmlc.so.0.3 /usr/local/lib/libdmlc.so.0.3
+# libxgboost links against the libdmlc.so.0 SONAME.  A Debian runtime created
+# this alias with ldconfig; copy the same shared object at that name because
+# the distroless image deliberately has no linker-cache management utility.
+COPY --from=xgboost /opt/xgboost/lib/libdmlc.so.0.3 /usr/local/lib/libdmlc.so.0
 COPY --from=build /replicasense /replicasense
-RUN ldconfig
-USER 65532:65532
 ENTRYPOINT ["/replicasense"]
