@@ -2,8 +2,8 @@ apiVersion: v2
 name: replicasense
 description: Self-hosted, KEDA-native predictive autoscaling extension
 type: application
-version: 0.2.5
-appVersion: "0.2.5"
+version: 0.2.6
+appVersion: "0.2.6"
 kubeVersion: ">=1.28.0-0"
 keywords:
   - keda
@@ -27,14 +27,14 @@ annotations:
       url: https://github.com/canberkturan/keda-replica-sense/issues
   artifacthub.io/images: |
     - name: Controller
-      image: ghcr.io/canberkturan/replicasense-controller:0.2.5
+      image: ghcr.io/canberkturan/replicasense-controller:0.2.6
     - name: Sampler
-      image: ghcr.io/canberkturan/replicasense-sampler:0.2.5
+      image: ghcr.io/canberkturan/replicasense-sampler:0.2.6
     - name: External scaler
-      image: ghcr.io/canberkturan/replicasense-scaler:0.2.5
+      image: ghcr.io/canberkturan/replicasense-scaler:0.2.6
     - name: XGBoost forecaster
-      image: ghcr.io/canberkturan/replicasense-forecaster:0.2.5-xgboost
+      image: ghcr.io/canberkturan/replicasense-forecaster:0.2.6-xgboost
     - name: XGBoost trainer
-      image: ghcr.io/canberkturan/replicasense-trainer:0.2.5-xgboost
+      image: ghcr.io/canberkturan/replicasense-trainer:0.2.6-xgboost
     - name: Training scheduler
-      image: ghcr.io/canberkturan/replicasense-training-scheduler:0.2.5
+      image: ghcr.io/canberkturan/replicasense-training-scheduler:0.2.6

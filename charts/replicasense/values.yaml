@@ -16,7 +16,7 @@ serviceMonitor:
 components:
   controller:
     replicas: 2
-    image: {repository: ghcr.io/canberkturan/replicasense-controller, tag: "0.2.5"}
+    image: {repository: ghcr.io/canberkturan/replicasense-controller, tag: "0.2.6"}
     serviceAccount: controller
     ports: []
     env:
@@ -24,12 +24,12 @@ components:
     probes: true
   sampler:
     replicas: 1
-    image: {repository: ghcr.io/canberkturan/replicasense-sampler, tag: "0.2.5"}
+    image: {repository: ghcr.io/canberkturan/replicasense-sampler, tag: "0.2.6"}
     ports: [{name: metrics, containerPort: 8080}]
     env: {}
   scaler:
     replicas: 2
-    image: {repository: ghcr.io/canberkturan/replicasense-scaler, tag: "0.2.5"}
+    image: {repository: ghcr.io/canberkturan/replicasense-scaler, tag: "0.2.6"}
     ports: [{name: grpc, containerPort: 6000}]
     affinity:
       podAntiAffinity:
@@ -43,7 +43,7 @@ components:
     env: {}
   forecaster:
     replicas: 1
-    image: {repository: ghcr.io/canberkturan/replicasense-forecaster, tag: "0.2.5-xgboost"}
+    image: {repository: ghcr.io/canberkturan/replicasense-forecaster, tag: "0.2.6-xgboost"}
     serviceAccount: forecaster
     ports: [{name: metrics, containerPort: 8080}]
     env:
@@ -52,11 +52,11 @@ components:
       REPLICASENSE_MODEL_MAX_AGE: 72h
   training-scheduler:
     replicas: 1
-    image: {repository: ghcr.io/canberkturan/replicasense-training-scheduler, tag: "0.2.5"}
+    image: {repository: ghcr.io/canberkturan/replicasense-training-scheduler, tag: "0.2.6"}
     serviceAccount: training-scheduler
     ports: []
     env:
-      REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.2.5-xgboost
+      REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.2.6-xgboost
       REPLICASENSE_TRAINING_INTERVAL: 24h
 
 scaler:

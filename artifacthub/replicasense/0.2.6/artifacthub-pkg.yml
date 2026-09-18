@@ -1,0 +1,49 @@
+version: 0.2.6
+name: replica-sense
+alternativeName: keda-replica-sense
+category: ai-machine-learning
+displayName: ReplicaSense
+createdAt: "2026-09-18T00:00:00Z"
+description: KEDA external scaler for safe predictive autoscaling using Prometheus, XGBoost forecasts, and surge protection.
+license: Apache-2.0
+homeURL: https://github.com/canberkturan/keda-replica-sense
+appVersion: 0.2.6
+keywords:
+  - keda
+  - keda-scaler
+  - external-scaler
+  - autoscaling
+  - predictive-autoscaling
+  - xgboost
+  - prometheus
+  - ai-machine-learning
+containersImages:
+  - name: Controller
+    image: ghcr.io/canberkturan/replicasense-controller:0.2.6
+  - name: Sampler
+    image: ghcr.io/canberkturan/replicasense-sampler:0.2.6
+  - name: External scaler
+    image: ghcr.io/canberkturan/replicasense-scaler:0.2.6
+  - name: XGBoost forecaster
+    image: ghcr.io/canberkturan/replicasense-forecaster:0.2.6-xgboost
+  - name: XGBoost trainer
+    image: ghcr.io/canberkturan/replicasense-trainer:0.2.6-xgboost
+  - name: Training scheduler
+    image: ghcr.io/canberkturan/replicasense-training-scheduler:0.2.6
+maintainers:
+  - name: Canberk TURAN
+    email: canberkkturann@gmail.com
+links:
+  - name: Source
+    url: https://github.com/canberkturan/keda-replica-sense
+  - name: Documentation
+    url: https://github.com/canberkturan/keda-replica-sense/tree/main/docs
+  - name: Support
+    url: https://github.com/canberkturan/keda-replica-sense/issues
+install: |
+  Install the ReplicaSense Helm chart, then add an `external` trigger to a KEDA
+  `ScaledObject`. KEDA, Prometheus Operator, and PostgreSQL are external
+  dependencies; see the package README for the complete production setup.
+changes:
+  - kind: changed
+    description: Updated runtime images to distroless Debian 13 and upgraded gRPC to v1.83.2 to remediate reported CVEs.
