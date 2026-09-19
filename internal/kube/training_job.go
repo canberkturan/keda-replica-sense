@@ -3,9 +3,11 @@ package kube
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
@@ -31,8 +33,8 @@ type TrainingJobCreator struct {
 }
 
 func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error {
-	if c.Client == nil || c.Namespace == "" || c.Image == "" || c.DatabaseSecretName == "" || c.DatabaseSecretKey == "" {
-		return fmt.Errorf("training Job creator requires client, namespace, image, and database Secret reference")
+	if c.Client == nil || c.Namespace == "" || c.Image == "" || c.DatabaseSecretName == "" || c.DatabaseSecretKey == "" || strings.TrimSpace(run.PolicyRevision) == "" {
+		return fmt.Errorf("training Job creator requires client, namespace, image, database Secret reference, and policy revision")
 	}
 	backoff := c.BackoffLimit
 	if backoff < 0 {
@@ -54,17 +56,25 @@ func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error 
 		return fmt.Errorf("training Job creator has invalid image pull policy %q", pullPolicy)
 	}
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "replicasense-trainer-", Namespace: c.Namespace, Labels: map[string]string{"app": "replicasense-trainer", "replicasense.keda.sh/training-run": run.RunID}},
+		ObjectMeta: metav1.ObjectMeta{Name: trainingJobName(run.RunID), Namespace: c.Namespace, Labels: map[string]string{"app": "replicasense-trainer", "replicasense.keda.sh/training-run": run.RunID}},
 		Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, ActiveDeadlineSeconds: &deadline, Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "replicasense-trainer"}},
 			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: c.ServiceAccount, AutomountServiceAccountToken: ptr.To(false), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)), RunAsGroup: ptr.To(int64(65532)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{{Name: "trainer", Image: c.Image, ImagePullPolicy: pullPolicy, Resources: c.Resources, SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}, Env: []corev1.EnvVar{
-				{Name: "REPLICASENSE_DATABASE_URL", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: c.DatabaseSecretName}, Key: c.DatabaseSecretKey}}}, {Name: "REPLICASENSE_CLUSTER_ID", Value: run.ClusterID}, {Name: "REPLICASENSE_WORKLOAD_ID", Value: run.WorkloadID}, {Name: "REPLICASENSE_TRAINING_RUN_ID", Value: run.RunID}, {Name: "REPLICASENSE_MODEL_ENGINE", Value: run.Engine},
+				{Name: "REPLICASENSE_DATABASE_URL", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: c.DatabaseSecretName}, Key: c.DatabaseSecretKey}}}, {Name: "REPLICASENSE_CLUSTER_ID", Value: run.ClusterID}, {Name: "REPLICASENSE_WORKLOAD_ID", Value: run.WorkloadID}, {Name: "REPLICASENSE_TRAINING_RUN_ID", Value: run.RunID}, {Name: "REPLICASENSE_MODEL_ENGINE", Value: run.Engine}, {Name: "REPLICASENSE_POLICY_REVISION", Value: run.PolicyRevision},
 			}}},
 			}},
 		},
 	}
-	if _, err := c.Client.BatchV1().Jobs(c.Namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+	if _, err := c.Client.BatchV1().Jobs(c.Namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create trainer Job: %w", err)
 	}
 	return nil
+}
+
+func trainingJobName(runID string) string {
+	name := "replicasense-trainer-" + strings.ToLower(strings.TrimSpace(runID))
+	if len(name) > 63 {
+		return name[:63]
+	}
+	return name
 }

@@ -87,6 +87,14 @@ The other engines are useful comparisons or simpler operational choices:
 | `rolling-quantile` | A conservative, transparent fallback | Quantile of historical horizon maxima. |
 | `holt-winters` | Smooth level, trend, and seasonality | Additive trend/seasonal projection. |
 | `xgboost` | Calendar-driven, non-linear recurring patterns | Learned horizon-maximum quantiles. |
+| `gru` | Repeating patterns with short-term sequence dynamics | A gated recurrent network trained on 60 causal demand samples plus business-time calendar features. |
+
+The GRU input sequence contains the observed demand, clock time, day of week,
+day of month, month, and weekend status in `businessTimezone`. It predicts the
+same horizon maximum used by the scaler; it does not attempt to predict a truly
+unseen surge. Keep surge protection and the native reactive trigger enabled for
+that case. GRU artifacts are numeric JSON and run in the normal Go runtime, so
+the existing trainer and forecaster images are sufficient.
 
 Training is automatic. The scheduler considers each active workload once per
 `REPLICASENSE_TRAINING_INTERVAL` (24 hours by default), spreads jobs within the
@@ -94,6 +102,15 @@ slot, and writes a candidate into PostgreSQL. The candidate is evaluated with
 walk-forward windows and is promoted only if it meets the policy. A completed
 Job is cleaned up by the controller; the run and model records remain for
 audit.
+
+An external trigger can request one idempotent immediate run with
+`immediateTraining: "true"`. Pair it with `clearOldModels: "true"` only when
+you explicitly want to discard the current model artifacts for that durable
+workload identity. The reset is keyed to the full policy revision, so ordinary
+controller reconciliations cannot repeatedly delete models or enqueue Jobs.
+An immediate Job waits for sampler history, and its policy revision is verified
+again by the trainer before it can publish a model. A Job from a replaced
+configuration therefore cannot reintroduce an obsolete model after a reset.
 
 Do not retrain every hour just because data arrives every minute. The
 day-to-day traffic shape normally changes more slowly than that, while frequent

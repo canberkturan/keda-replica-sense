@@ -58,6 +58,19 @@ func TestServicePersistsRejectedCandidateAndMarksRunSucceeded(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsStalePolicyRevisionBeforeModelCreation(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	w := workloadstore.SamplingWorkload{ID: "w1", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "lab"}, PolicyRevision: "current", Forecast: domain.ForecastConfig{ModelEngine: "seasonal-baseline", TrainingWindow: 24 * time.Hour, SamplingInterval: time.Hour, Horizon: time.Hour}}}
+	runs, models := &fakeRuns{}, &fakeModels{}
+	service := Service{Workloads: fakeWorkloads{items: []workloadstore.SamplingWorkload{w}}, Samples: fakeSamples{}, Runs: runs, Models: models, ExpectedPolicyRevision: "old"}
+	if err := service.Run(context.Background(), "lab", "w1", "run-1", "seasonal-baseline", now); err == nil {
+		t.Fatal("stale policy revision must be rejected")
+	}
+	if !runs.running || runs.failed == "" || models.candidate.Engine != "" {
+		t.Fatalf("stale job must fail before creating a candidate: runs=%#v models=%#v", runs, models)
+	}
+}
+
 func TestFeatureSchemaForXGBoostUsesVersionedFeatureContract(t *testing.T) {
 	if got, want := featureSchemaFor("xgboost"), "demand-calendar-lag-v3"; got != want {
 		t.Fatalf("feature schema = %q, want %q", got, want)

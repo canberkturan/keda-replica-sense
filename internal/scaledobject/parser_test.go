@@ -51,6 +51,10 @@ func TestParse(t *testing.T) {
 		{name: "day training window", input: withMetadata(valid(), "trainingWindow", "30d"), candidates: 1, valid: true},
 		{name: "business timezone", input: withMetadata(valid(), "businessTimezone", "Europe/Istanbul"), candidates: 1, valid: true},
 		{name: "invalid business timezone", input: withMetadata(valid(), "businessTimezone", "not/a-timezone"), candidates: 1, valid: false},
+		{name: "immediate training", input: withMetadata(valid(), "immediateTraining", "true"), candidates: 1, valid: true},
+		{name: "invalid immediate training", input: withMetadata(valid(), "immediateTraining", "sometimes"), candidates: 1, valid: false},
+		{name: "clear old models", input: withMetadata(valid(), "clearOldModels", "true"), candidates: 1, valid: true},
+		{name: "invalid clear old models", input: withMetadata(valid(), "clearOldModels", "sometimes"), candidates: 1, valid: false},
 		{name: "readiness horizon", input: withMetadata(withMetadata(valid(), "startupLatency", "2m"), "safetyBuffer", "1m"), candidates: 1, valid: true},
 		{name: "unrelated external scaler is ignored", input: withMetadata(valid(), "scalerAddress", "other.default.svc:6000"), candidates: 0, valid: false},
 		{name: "duplicate predictive source trigger", input: duplicatePredictiveSource(valid()), candidates: 2, valid: false},
@@ -78,6 +82,8 @@ func TestParseFingerprintBoundaries(t *testing.T) {
 	threshold := Parse(withSourceMetadata(validInput(), "threshold", "200"), options).Candidates[0].Spec
 	quantile := Parse(withMetadata(validInput(), "quantile", "0.90"), options).Candidates[0].Spec
 	query := Parse(withSourceMetadata(validInput(), "query", "up"), options).Candidates[0].Spec
+	immediate := Parse(withMetadata(validInput(), "immediateTraining", "true"), options).Candidates[0].Spec
+	clear := Parse(withMetadata(validInput(), "clearOldModels", "true"), options).Candidates[0].Spec
 
 	if base.SourceFingerprint != threshold.SourceFingerprint || base.PolicyRevision == threshold.PolicyRevision {
 		t.Fatal("threshold must retain source fingerprint and change policy revision")
@@ -87,6 +93,12 @@ func TestParseFingerprintBoundaries(t *testing.T) {
 	}
 	if base.SourceFingerprint == query.SourceFingerprint {
 		t.Fatal("query must change source fingerprint")
+	}
+	if base.PolicyRevision == immediate.PolicyRevision {
+		t.Fatal("immediate training must change policy revision")
+	}
+	if base.PolicyRevision == clear.PolicyRevision {
+		t.Fatal("clear old models must change policy revision")
 	}
 }
 
@@ -103,7 +115,7 @@ func TestParseDefaultsToXGBoost(t *testing.T) {
 
 func TestParseAcceptsEverySupportedModelEngine(t *testing.T) {
 	options := ParserOptions{ClusterID: "cluster-a", ScalerAddresses: map[string]struct{}{"replicasense.default.svc:6000": {}}, DefaultMaxReplicaCount: 100}
-	for _, engine := range []string{"seasonal-baseline", "rolling-quantile", "holt-winters", "xgboost"} {
+	for _, engine := range []string{"seasonal-baseline", "rolling-quantile", "holt-winters", "xgboost", "gru"} {
 		t.Run(engine, func(t *testing.T) {
 			result := Parse(withMetadata(validInput(), "modelEngine", engine), options)
 			if len(result.Candidates) != 1 || result.Candidates[0].Spec == nil {

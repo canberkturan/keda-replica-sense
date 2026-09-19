@@ -31,6 +31,8 @@ CREATE TABLE workloads (
     business_timezone TEXT NOT NULL DEFAULT 'UTC',
     startup_latency_seconds BIGINT NOT NULL DEFAULT 0,
     safety_buffer_seconds BIGINT NOT NULL DEFAULT 0,
+    immediate_training BOOLEAN NOT NULL DEFAULT FALSE,
+    clear_old_models BOOLEAN NOT NULL DEFAULT FALSE,
     policy_revision CHAR(64) NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     validation_errors JSONB NOT NULL DEFAULT '[]'::jsonb,

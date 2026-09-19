@@ -12,9 +12,9 @@ import (
 )
 
 func main() {
-	cluster, databaseURL, workloadID, runID := os.Getenv("REPLICASENSE_CLUSTER_ID"), os.Getenv("REPLICASENSE_DATABASE_URL"), os.Getenv("REPLICASENSE_WORKLOAD_ID"), os.Getenv("REPLICASENSE_TRAINING_RUN_ID")
-	if cluster == "" || databaseURL == "" || workloadID == "" || runID == "" {
-		fmt.Fprintln(os.Stderr, "REPLICASENSE_CLUSTER_ID, REPLICASENSE_DATABASE_URL, REPLICASENSE_WORKLOAD_ID, and REPLICASENSE_TRAINING_RUN_ID are required")
+	cluster, databaseURL, workloadID, runID, policyRevision := os.Getenv("REPLICASENSE_CLUSTER_ID"), os.Getenv("REPLICASENSE_DATABASE_URL"), os.Getenv("REPLICASENSE_WORKLOAD_ID"), os.Getenv("REPLICASENSE_TRAINING_RUN_ID"), os.Getenv("REPLICASENSE_POLICY_REVISION")
+	if cluster == "" || databaseURL == "" || workloadID == "" || runID == "" || policyRevision == "" {
+		fmt.Fprintln(os.Stderr, "REPLICASENSE_CLUSTER_ID, REPLICASENSE_DATABASE_URL, REPLICASENSE_WORKLOAD_ID, REPLICASENSE_TRAINING_RUN_ID, and REPLICASENSE_POLICY_REVISION are required")
 		os.Exit(1)
 	}
 	ctx := context.Background()
@@ -25,7 +25,7 @@ func main() {
 	}
 	defer pool.Close()
 	repository := postgres.NewSampleRepository(pool)
-	service := trainer.Service{Workloads: repository, Samples: repository, Runs: postgres.NewTrainingRepository(pool), Models: postgres.NewModelRepository(pool)}
+	service := trainer.Service{Workloads: repository, Samples: repository, Runs: postgres.NewTrainingRepository(pool), Models: postgres.NewModelRepository(pool), ExpectedPolicyRevision: policyRevision}
 	if err := service.Run(ctx, cluster, workloadID, runID, os.Getenv("REPLICASENSE_MODEL_ENGINE"), time.Now()); err != nil {
 		fmt.Fprintln(os.Stderr, "train:", err)
 		os.Exit(1)

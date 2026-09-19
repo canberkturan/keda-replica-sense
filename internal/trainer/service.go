@@ -36,10 +36,11 @@ type Models interface {
 }
 
 type Service struct {
-	Workloads Workloads
-	Samples   Samples
-	Runs      Runs
-	Models    Models
+	Workloads              Workloads
+	Samples                Samples
+	Runs                   Runs
+	Models                 Models
+	ExpectedPolicyRevision string
 }
 
 func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine string, now time.Time) (err error) {
@@ -68,6 +69,9 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if workload == nil {
 		return fmt.Errorf("active workload %s not found", workloadID)
 	}
+	if s.ExpectedPolicyRevision != "" && workload.Spec.PolicyRevision != s.ExpectedPolicyRevision {
+		return fmt.Errorf("training Job policy revision no longer matches workload %s", workloadID)
+	}
 	if engine == "" {
 		engine = workload.Spec.Forecast.ModelEngine
 	}
@@ -93,6 +97,11 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 		model, artifact, err = forecast.TrainXGBoost(samples, request)
 		if err == nil {
 			validation, err = forecast.ValidateXGBoost(samples, request, 48)
+		}
+	} else if engine == "gru" {
+		model, artifact, err = forecast.TrainGRU(samples, request)
+		if err == nil {
+			validation, err = forecast.ValidateGRU(samples, request, 12)
 		}
 	} else {
 		model, err = forecast.ResolveModel(engine)
@@ -124,7 +133,7 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	} else {
 		decision = training.EvaluatePromotion(training.DefaultPromotionPolicy(), validation, champion, baselineValidation)
 	}
-	metrics, err := json.Marshal(map[string]any{"sample_count": len(samples), "baseline": model.Engine() != "xgboost", "operational_quantile": forecastOperationalQuantile(request), "walk_forward": validation, "deterministic_baseline": baselineValidation, "promotion": decision})
+	metrics, err := json.Marshal(map[string]any{"sample_count": len(samples), "baseline": model.Engine() != "xgboost" && model.Engine() != "gru", "operational_quantile": forecastOperationalQuantile(request), "walk_forward": validation, "deterministic_baseline": baselineValidation, "promotion": decision})
 	if err != nil {
 		return err
 	}
@@ -146,6 +155,9 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 func featureSchemaFor(engine string) string {
 	if engine == "xgboost" {
 		return features.SchemaV3
+	}
+	if engine == "gru" {
+		return forecast.GRUFeatureSchema
 	}
 	return "v1"
 }

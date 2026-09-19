@@ -164,11 +164,68 @@ default model engine. After a workload is changed to XGBoost, prediction stays
 fail-closed until its first validated model is active; the native KEDA trigger
 continues to work during that period.
 
+Set `modelEngine: gru` when a workload has a stable repeating pattern but the
+most recent demand sequence also carries useful shape information. GRU uses
+the last 60 samples and the configured business-time clock, day-of-week, day-of-month,
+month, and weekend signals. It predicts a future-horizon maximum, not an
+unpredictable incident; retain the native trigger and surge protection. GRU is
+included in the standard Go runtime—no separate Trainer or Forecaster image is
+needed.
+
 For common model choices, training behavior, and the meaning of a
 horizon-maximum forecast, see [architecture.md](architecture.md). A forecast
 that barely changes from one minute to the next is not automatically stuck: it
 is one estimate of the maximum over the configured horizon, and stable inputs
 often lead to the same model region and a similar answer.
+
+### Train now or replace a model deliberately
+
+Training normally runs once per workload per day. For a new workload, a model
+engine change, or a controlled benchmark, add either of these boolean metadata
+fields to the ReplicaSense external trigger:
+
+```yaml
+      immediateTraining: "true"
+      clearOldModels: "true"
+```
+
+`immediateTraining` creates one Trainer Job for this exact configuration
+revision without waiting for the daily slot. The scheduler first waits until
+the sampler has backfilled a complete training window for the current metric
+contract; this avoids spending the one-time request on an undersized dataset.
+It checks again every minute and starts as soon as that history is available.
+The request is idempotent: controller reconciliations and scheduler restarts
+do not create duplicate Jobs.
+
+Each Trainer Job is bound to the policy revision that created it. If the
+ScaledObject changes while a Job is pending or running, that stale Job fails
+before it can publish a candidate or reactivate a model for the replacement
+contract.
+
+`clearOldModels` is deliberately destructive. When the configuration revision
+changes, ReplicaSense removes all model artifacts for the same durable workload
+identity and detaches them from retained training-run audit records. Use it
+when you intentionally want a completely fresh model after changing the signal,
+feature assumptions, or engine. If `immediateTraining` is false, the old model
+is cleared now and the normal daily schedule trains the replacement.
+
+Do not leave `clearOldModels: "true"` in a frequently edited ScaledObject
+without understanding that every meaningful predictive configuration change is
+a fresh-start request. A changed query also changes the source fingerprint, so
+old samples are not mixed into a new data set.
+
+### Schema update for existing installations
+
+New databases created from `migrations/schema.sql` already contain the fields
+used by this feature. Before running a release that includes it against an
+existing ReplicaSense database, apply this reviewed, additive schema update
+with the database-owner role:
+
+```sql
+ALTER TABLE workloads
+  ADD COLUMN IF NOT EXISTS immediate_training BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS clear_old_models BOOLEAN NOT NULL DEFAULT FALSE;
+```
 
 ## 5. Observe and operate
 

@@ -177,12 +177,14 @@ func parseForecastConfig(trigger TriggerInput, add func(string, string)) domain.
 	samplingInterval := parseDuration(trigger.Metadata["samplingInterval"], defaultSamplingInterval, "metadata.samplingInterval", add)
 	startupLatency := parseNonNegativeDuration(trigger.Metadata["startupLatency"], "metadata.startupLatency", add)
 	safetyBuffer := parseNonNegativeDuration(trigger.Metadata["safetyBuffer"], "metadata.safetyBuffer", add)
+	immediateTraining := parseBool(trigger.Metadata["immediateTraining"], "metadata.immediateTraining", add)
+	clearOldModels := parseBool(trigger.Metadata["clearOldModels"], "metadata.clearOldModels", add)
 	quantile := parseQuantile(trigger.Metadata["quantile"], add)
 	engine := strings.TrimSpace(trigger.Metadata["modelEngine"])
 	if engine == "" {
 		engine = defaultModelEngine
 	}
-	if engine != defaultModelEngine && engine != "seasonal-baseline" && engine != "rolling-quantile" && engine != "holt-winters" && engine != "xgboost" {
+	if engine != defaultModelEngine && engine != "seasonal-baseline" && engine != "rolling-quantile" && engine != "holt-winters" && engine != "xgboost" && engine != "gru" {
 		add("metadata.modelEngine", fmt.Sprintf("unsupported model engine %q", engine))
 	}
 	if trainingWindow < 7*24*time.Hour || trainingWindow > 90*24*time.Hour {
@@ -208,7 +210,18 @@ func parseForecastConfig(trigger TriggerInput, add func(string, string)) domain.
 	if _, err := time.LoadLocation(timezone); err != nil {
 		add("metadata.businessTimezone", "must be a valid IANA timezone, for example Europe/Istanbul")
 	}
-	return domain.ForecastConfig{Horizon: horizon, Quantile: quantile, TrainingWindow: trainingWindow, SamplingInterval: samplingInterval, ModelEngine: engine, BusinessTimezone: timezone, StartupLatency: startupLatency, SafetyBuffer: safetyBuffer}
+	return domain.ForecastConfig{Horizon: horizon, Quantile: quantile, TrainingWindow: trainingWindow, SamplingInterval: samplingInterval, ModelEngine: engine, BusinessTimezone: timezone, StartupLatency: startupLatency, SafetyBuffer: safetyBuffer, ImmediateTraining: immediateTraining, ClearOldModels: clearOldModels}
+}
+
+func parseBool(raw, field string, add func(string, string)) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	value, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		add(field, "must be true or false")
+	}
+	return value
 }
 
 func parseNonNegativeDuration(raw, field string, add func(string, string)) time.Duration {

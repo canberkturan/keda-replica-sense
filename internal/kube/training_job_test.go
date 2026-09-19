@@ -15,7 +15,7 @@ import (
 func TestTrainingJobCreatorUsesRunIdentity(t *testing.T) {
 	client := fake.NewClientset()
 	creator := TrainingJobCreator{Client: client, Namespace: "replicasense-system", Image: "replicasense-trainer:dev", ServiceAccount: "replicasense-trainer", DatabaseSecretName: "replicasense-database", DatabaseSecretKey: "url"}
-	if err := creator.Create(context.Background(), training.Job{RunID: "run-1", ClusterID: "lab", WorkloadID: "workload-1", Engine: "seasonal-baseline"}); err != nil {
+	if err := creator.Create(context.Background(), training.Job{RunID: "run-1", ClusterID: "lab", WorkloadID: "workload-1", Engine: "seasonal-baseline", PolicyRevision: "revision-1"}); err != nil {
 		t.Fatal(err)
 	}
 	jobs, err := client.BatchV1().Jobs("replicasense-system").List(context.Background(), metav1.ListOptions{})
@@ -28,6 +28,9 @@ func TestTrainingJobCreatorUsesRunIdentity(t *testing.T) {
 	if jobs.Items[0].Spec.Template.Spec.Containers[0].Env[2].Value != "workload-1" {
 		t.Fatalf("trainer environment = %#v", jobs.Items[0].Spec.Template.Spec.Containers[0].Env)
 	}
+	if got := jobs.Items[0].Spec.Template.Spec.Containers[0].Env[5].Value; got != "revision-1" {
+		t.Fatalf("trainer policy revision = %q, want revision-1", got)
+	}
 	podSecurity := jobs.Items[0].Spec.Template.Spec.SecurityContext
 	containerSecurity := jobs.Items[0].Spec.Template.Spec.Containers[0].SecurityContext
 	if podSecurity == nil || podSecurity.RunAsNonRoot == nil || !*podSecurity.RunAsNonRoot || containerSecurity == nil || containerSecurity.AllowPrivilegeEscalation == nil || *containerSecurity.AllowPrivilegeEscalation {
@@ -36,13 +39,19 @@ func TestTrainingJobCreatorUsesRunIdentity(t *testing.T) {
 	if jobs.Items[0].Spec.Template.Spec.AutomountServiceAccountToken == nil || *jobs.Items[0].Spec.Template.Spec.AutomountServiceAccountToken {
 		t.Fatalf("trainer Job should not mount a Kubernetes API token")
 	}
+	if jobs.Items[0].Name != "replicasense-trainer-run-1" {
+		t.Fatalf("Job name = %q", jobs.Items[0].Name)
+	}
+	if err := creator.Create(context.Background(), training.Job{RunID: "run-1", ClusterID: "lab", WorkloadID: "workload-1", Engine: "seasonal-baseline", PolicyRevision: "revision-1"}); err != nil {
+		t.Fatalf("idempotent Job create: %v", err)
+	}
 }
 
 func TestTrainingJobCreatorAppliesResourceAndExecutionBounds(t *testing.T) {
 	client := fake.NewClientset()
 	resources := corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("512Mi")}}
 	creator := TrainingJobCreator{Client: client, Namespace: "replicasense-system", Image: "replicasense-trainer:dev", DatabaseSecretName: "replicasense-database", DatabaseSecretKey: "url", Resources: resources, ActiveDeadlineSecs: 120}
-	if err := creator.Create(context.Background(), training.Job{RunID: "run-1", ClusterID: "lab", WorkloadID: "workload-1", Engine: "xgboost"}); err != nil {
+	if err := creator.Create(context.Background(), training.Job{RunID: "run-1", ClusterID: "lab", WorkloadID: "workload-1", Engine: "xgboost", PolicyRevision: "revision-1"}); err != nil {
 		t.Fatal(err)
 	}
 	job, err := client.BatchV1().Jobs("replicasense-system").List(context.Background(), metav1.ListOptions{})

@@ -43,6 +43,12 @@ type ForecastConfig struct {
 	BusinessTimezone string
 	StartupLatency   time.Duration
 	SafetyBuffer     time.Duration
+	// ImmediateTraining requests one training run for this exact policy revision
+	// instead of waiting for the normal schedule.
+	ImmediateTraining bool
+	// ClearOldModels retires all stored artifacts for this logical workload when
+	// its policy revision changes. It is intentionally opt-in and irreversible.
+	ClearOldModels bool
 }
 
 // DecisionHorizon is when capacity created by this decision is expected to be
