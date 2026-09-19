@@ -26,6 +26,8 @@ type TrainingJobCreator struct {
 	DatabaseSecretKey  string
 	BackoffLimit       int32
 	TTLSecondsAfter    int32
+	ActiveDeadlineSecs int64
+	Resources          corev1.ResourceRequirements
 }
 
 func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error {
@@ -40,6 +42,10 @@ func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error 
 	if ttl <= 0 {
 		ttl = 3600
 	}
+	deadline := c.ActiveDeadlineSecs
+	if deadline <= 0 {
+		deadline = 3600
+	}
 	pullPolicy := c.ImagePullPolicy
 	if pullPolicy == "" {
 		pullPolicy = corev1.PullIfNotPresent
@@ -49,9 +55,9 @@ func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error 
 	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{GenerateName: "replicasense-trainer-", Namespace: c.Namespace, Labels: map[string]string{"app": "replicasense-trainer", "replicasense.keda.sh/training-run": run.RunID}},
-		Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, Template: corev1.PodTemplateSpec{
+		Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, ActiveDeadlineSeconds: &deadline, Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "replicasense-trainer"}},
-			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: c.ServiceAccount, AutomountServiceAccountToken: ptr.To(false), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)), RunAsGroup: ptr.To(int64(65532)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{{Name: "trainer", Image: c.Image, ImagePullPolicy: pullPolicy, SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}, Env: []corev1.EnvVar{
+			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: c.ServiceAccount, AutomountServiceAccountToken: ptr.To(false), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)), RunAsGroup: ptr.To(int64(65532)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{{Name: "trainer", Image: c.Image, ImagePullPolicy: pullPolicy, Resources: c.Resources, SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}, Env: []corev1.EnvVar{
 				{Name: "REPLICASENSE_DATABASE_URL", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: c.DatabaseSecretName}, Key: c.DatabaseSecretKey}}}, {Name: "REPLICASENSE_CLUSTER_ID", Value: run.ClusterID}, {Name: "REPLICASENSE_WORKLOAD_ID", Value: run.WorkloadID}, {Name: "REPLICASENSE_TRAINING_RUN_ID", Value: run.RunID}, {Name: "REPLICASENSE_MODEL_ENGINE", Value: run.Engine},
 			}}},
 			}},

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -33,5 +35,24 @@ func TestTrainingJobCreatorUsesRunIdentity(t *testing.T) {
 	}
 	if jobs.Items[0].Spec.Template.Spec.AutomountServiceAccountToken == nil || *jobs.Items[0].Spec.Template.Spec.AutomountServiceAccountToken {
 		t.Fatalf("trainer Job should not mount a Kubernetes API token")
+	}
+}
+
+func TestTrainingJobCreatorAppliesResourceAndExecutionBounds(t *testing.T) {
+	client := fake.NewClientset()
+	resources := corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("512Mi")}}
+	creator := TrainingJobCreator{Client: client, Namespace: "replicasense-system", Image: "replicasense-trainer:dev", DatabaseSecretName: "replicasense-database", DatabaseSecretKey: "url", Resources: resources, ActiveDeadlineSecs: 120}
+	if err := creator.Create(context.Background(), training.Job{RunID: "run-1", ClusterID: "lab", WorkloadID: "workload-1", Engine: "xgboost"}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.BatchV1().Jobs("replicasense-system").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := job.Items[0].Spec.ActiveDeadlineSeconds; got == nil || *got != 120 {
+		t.Fatalf("active deadline = %v, want 120", got)
+	}
+	if got := job.Items[0].Spec.Template.Spec.Containers[0].Resources.Requests.Cpu().String(); got != "500m" {
+		t.Fatalf("trainer CPU request = %q, want 500m", got)
 	}
 }

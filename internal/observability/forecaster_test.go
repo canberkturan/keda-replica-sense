@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/canberkturan/keda-replica-sense/internal/domain"
+	"github.com/canberkturan/keda-replica-sense/internal/kube"
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -34,4 +35,20 @@ func TestForecasterMetricsUsesConfiguredOperationalQuantileLabel(t *testing.T) {
 	if !found {
 		t.Fatal("configured 0.99 quantile label was not exported")
 	}
+}
+
+func TestForecasterMetricsExportsClusterCapacity(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewForecasterMetrics(registry)
+	metrics.RecordCapacity("lab", kube.CapacitySnapshot{})
+	collected, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range collected {
+		if family.GetName() == "replicasense_cluster_resource_capacity" && len(family.GetMetric()) == 8 {
+			return
+		}
+	}
+	t.Fatal("cluster capacity metric must expose CPU and memory accounting states")
 }

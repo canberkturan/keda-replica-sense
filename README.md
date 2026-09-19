@@ -46,7 +46,9 @@ database URL Secret and intentionally does not install KEDA or PostgreSQL.
 The complete database bootstrap, Helm installation, workload setup, and
 operations flow is in the [installation guide](docs/enterprise-installation.md).
 See the [metrics reference](docs/metrics.md) for Prometheus metric meanings,
-labels, dashboard queries, and alerting guidance.
+labels, dashboard queries, and alerting guidance. The [architecture guide](docs/architecture.md)
+explains topology, training, model selection, scaling semantics, and failure
+behavior.
 
 `Dockerfile.xgboost` is the reproducible image foundation for the default
 forecaster and Trainer Job images. The native engine is enabled only in images

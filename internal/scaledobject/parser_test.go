@@ -101,6 +101,21 @@ func TestParseDefaultsToXGBoost(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsEverySupportedModelEngine(t *testing.T) {
+	options := ParserOptions{ClusterID: "cluster-a", ScalerAddresses: map[string]struct{}{"replicasense.default.svc:6000": {}}, DefaultMaxReplicaCount: 100}
+	for _, engine := range []string{"seasonal-baseline", "rolling-quantile", "holt-winters", "xgboost"} {
+		t.Run(engine, func(t *testing.T) {
+			result := Parse(withMetadata(validInput(), "modelEngine", engine), options)
+			if len(result.Candidates) != 1 || result.Candidates[0].Spec == nil {
+				t.Fatalf("model engine %q must produce a valid predictive workload: %#v", engine, result)
+			}
+			if got := result.Candidates[0].Spec.Forecast.ModelEngine; got != engine {
+				t.Fatalf("model engine = %q, want %q", got, engine)
+			}
+		})
+	}
+}
+
 func TestParseRetainsConfiguredOperationalQuantile(t *testing.T) {
 	options := ParserOptions{ClusterID: "cluster-a", ScalerAddresses: map[string]struct{}{"replicasense.default.svc:6000": {}}, DefaultMaxReplicaCount: 100}
 	result := Parse(withMetadata(validInput(), "quantile", "0.99"), options)

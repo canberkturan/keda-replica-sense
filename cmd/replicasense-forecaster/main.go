@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -20,7 +18,6 @@ import (
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -60,19 +57,14 @@ func main() {
 	budgetGuard := forecaster.SpeculativeBudgetGuard{Reader: forecastRepository, ClusterID: cluster, MaxAdditionalReplicas: replicaBudgetEnv("REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET", 50)}
 	modelCache := forecaster.NewModelCache(cluster, postgres.NewModelRepository(pool), durationEnv("REPLICASENSE_MODEL_MAX_AGE", 72*time.Hour))
 	metricsRegistry := prometheus.NewRegistry()
+	metricsRegistry.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	metrics := observability.NewForecasterMetrics(metricsRegistry)
-	metricsServer := &http.Server{Addr: valueOrDefault("REPLICASENSE_METRICS_LISTEN_ADDRESS", ":8080"), Handler: promhttp.HandlerFor(metricsRegistry, promhttp.HandlerOpts{}), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
-	go func() {
-		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintln(os.Stderr, "serve metrics:", err)
-		}
-	}()
-	go func() {
-		<-ctx.Done()
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = metricsServer.Shutdown(shutdownContext)
-	}()
+	capacityGuard.Observer = func(snapshot kube.CapacitySnapshot) {
+		metrics.RecordCapacity(cluster, snapshot)
+	}
+	observability.StartMetricsServer(ctx, valueOrDefault("REPLICASENSE_METRICS_LISTEN_ADDRESS", ":8080"), metricsRegistry, func(err error) {
+		fmt.Fprintln(os.Stderr, "serve metrics:", err)
+	})
 	service := forecaster.Service{Samples: repo, Snapshots: forecastRepository, SeasonalPeriod: period, MinimumSamples: minimum, DisableSurgeDetection: boolEnv("REPLICASENSE_DISABLE_SURGE_DETECTION", false), Models: modelCache, CurrentReplicas: func(ctx context.Context, w workloadstore.SamplingWorkload) (float64, error) {
 		return replicaReader.CurrentReplicas(ctx, w.Spec.Key.Namespace, w.Spec.ScaleTarget.Name)
 	}, ClusterHealthy: healthChecker.Healthy}
@@ -85,21 +77,31 @@ func main() {
 	evaluator := postgres.NewEvaluator(pool)
 	for {
 		now := time.Now()
+		cycleErr := false
 		if err := modelCache.Refresh(ctx); err != nil {
+			cycleErr = true
 			fmt.Fprintln(os.Stderr, "refresh active models:", err)
 		}
 		workloads, err := repo.ListActiveForCluster(ctx, cluster)
 		if err == nil {
 			for _, w := range workloads {
 				if _, err := service.Forecast(ctx, w, now); err != nil {
+					cycleErr = true
 					fmt.Fprintln(os.Stderr, "forecast:", err)
 				}
 			}
 		} else {
+			cycleErr = true
 			fmt.Fprintln(os.Stderr, "list workloads:", err)
 		}
 		if err := evaluator.EvaluateMatured(ctx, now); err != nil {
+			cycleErr = true
 			fmt.Fprintln(os.Stderr, "evaluate forecasts:", err)
+		}
+		if cycleErr {
+			metrics.RecordCycle(now, fmt.Errorf("forecaster cycle failed"))
+		} else {
+			metrics.RecordCycle(now, nil)
 		}
 		select {
 		case <-ctx.Done():

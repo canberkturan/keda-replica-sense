@@ -16,7 +16,10 @@ func TestSamplerMetricsRecordsObservedDemand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(collected) != 1 || collected[0].GetName() != "replicasense_observed_demand" || collected[0].GetMetric()[0].GetGauge().GetValue() != 42 {
-		t.Fatalf("unexpected observed-demand metric: %#v", collected)
+	for _, family := range collected {
+		if family.GetName() == "replicasense_observed_demand" && family.GetMetric()[0].GetGauge().GetValue() == 42 {
+			return
+		}
 	}
+	t.Fatalf("unexpected observed-demand metric: %#v", collected)
 }

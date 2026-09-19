@@ -39,6 +39,11 @@ func TestServerServesOnlyFreshSnapshots(t *testing.T) {
 	if metrics.GetMetricValues()[0].GetMetricValueFloat() != 0 {
 		t.Fatalf("stale value = %v", metrics.GetMetricValues()[0].GetMetricValueFloat())
 	}
+	server.SnapshotReader = fakeSnapshots{snapshot: &domain.ForecastSnapshot{GeneratedAt: time.Now().Add(time.Minute), SafeDemand: 7}}
+	metrics, _ = server.GetMetrics(context.Background(), request)
+	if metrics.GetMetricValues()[0].GetMetricValueFloat() != 0 {
+		t.Fatalf("future-dated value = %v", metrics.GetMetricValues()[0].GetMetricValueFloat())
+	}
 }
 
 type fakeSnapshots struct{ snapshot *domain.ForecastSnapshot }

@@ -21,6 +21,7 @@ spec:
         {{- include "replicasense.labels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $component }}
     spec:
+      automountServiceAccountToken: {{ if or (eq $component "controller") (eq $component "forecaster") (eq $component "training-scheduler") }}true{{ else }}false{{ end }}
       {{- if $config.serviceAccount }}
       serviceAccountName: {{ include "replicasense.componentName" (dict "root" $root "component" $config.serviceAccount) }}
       {{- end }}
@@ -36,12 +37,20 @@ spec:
         {{- toYaml $root.Values.securityContext | nindent 8 }}
       containers:
         - name: {{ $component }}
+          {{- if $config.image.digest }}
+          image: {{ printf "%s@%s" $config.image.repository $config.image.digest | quote }}
+          {{- else }}
           image: {{ printf "%s:%s" $config.image.repository ($config.image.tag | toString) | quote }}
+          {{- end }}
           imagePullPolicy: {{ $root.Values.imagePullPolicy }}
           securityContext:
             {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
           {{- with $config.ports }}
           ports:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.resources }}
+          resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
@@ -71,16 +80,26 @@ spec:
               value: {{ $root.Values.database.urlKey | quote }}
             - name: REPLICASENSE_TRAINER_IMAGE_PULL_POLICY
               value: {{ $root.Values.imagePullPolicy | quote }}
+            - name: REPLICASENSE_TRAINER_REQUEST_CPU
+              value: {{ $root.Values.trainer.resources.requests.cpu | quote }}
+            - name: REPLICASENSE_TRAINER_REQUEST_MEMORY
+              value: {{ $root.Values.trainer.resources.requests.memory | quote }}
+            - name: REPLICASENSE_TRAINER_LIMIT_CPU
+              value: {{ $root.Values.trainer.resources.limits.cpu | quote }}
+            - name: REPLICASENSE_TRAINER_LIMIT_MEMORY
+              value: {{ $root.Values.trainer.resources.limits.memory | quote }}
+            - name: REPLICASENSE_TRAINER_ACTIVE_DEADLINE_SECONDS
+              value: {{ $root.Values.trainer.activeDeadlineSeconds | quote }}
             {{- end }}
             {{- range $key, $value := $config.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
-          {{- if $config.probes }}
+          {{- with $config.probes }}
           readinessProbe:
-            httpGet: {path: /readyz, port: 8081}
+            {{- toYaml .readiness | nindent 12 }}
           livenessProbe:
-            httpGet: {path: /healthz, port: 8081}
+            {{- toYaml .liveness | nindent 12 }}
           {{- end }}
 {{- end }}
 ---
@@ -99,6 +118,20 @@ spec:
     - name: grpc
       port: {{ .Values.scaler.service.port }}
       targetPort: grpc
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}
+  labels:
+    {{- include "replicasense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: controller}
+  ports: [{name: metrics, port: 8080, targetPort: metrics}]
 ---
 apiVersion: v1
 kind: Service
@@ -131,7 +164,7 @@ spec:
   selector:
     matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: scaler}
 {{- if .Values.serviceMonitor.enabled }}
-{{- range $component := list "sampler" "forecaster" }}
+{{- range $component := list "controller" "sampler" "scaler" "forecaster" }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor

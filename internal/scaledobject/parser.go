@@ -182,7 +182,7 @@ func parseForecastConfig(trigger TriggerInput, add func(string, string)) domain.
 	if engine == "" {
 		engine = defaultModelEngine
 	}
-	if engine != defaultModelEngine && engine != "rolling-quantile" && engine != "holt-winters" && engine != "xgboost" {
+	if engine != defaultModelEngine && engine != "seasonal-baseline" && engine != "rolling-quantile" && engine != "holt-winters" && engine != "xgboost" {
 		add("metadata.modelEngine", fmt.Sprintf("unsupported model engine %q", engine))
 	}
 	if trainingWindow < 7*24*time.Hour || trainingWindow > 90*24*time.Hour {

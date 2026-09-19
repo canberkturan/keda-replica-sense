@@ -9,6 +9,10 @@ ReplicaSense does not replace KEDA. If a prediction is unavailable, stale, or
 unsafe, its predictive metric returns zero while the native KEDA trigger keeps
 reactive scaling available.
 
+Read [how ReplicaSense fits into your platform](architecture.md) first if you
+are deciding where to place it, which model to use, or how training and the
+capacity guard work.
+
 ## Before you begin
 
 You need:
@@ -78,8 +82,8 @@ For a private registry, add:
 
 The chart creates Prometheus Operator `ServiceMonitor` resources by default.
 If your Prometheus installation does not use that operator, disable them with
-`--set serviceMonitor.enabled=false` and configure scraping for the sampler and
-forecaster Services yourself.
+`--set serviceMonitor.enabled=false` and configure scraping for the controller,
+sampler, forecaster, and scaler Services yourself.
 
 Check the rollout:
 
@@ -88,6 +92,42 @@ kubectl -n replicasense-system get deploy,pod,svc
 kubectl -n replicasense-system rollout status deployment/replicasense-controller
 kubectl -n replicasense-system rollout status deployment/replicasense-scaler
 ```
+
+### Production values worth reviewing
+
+The chart has deliberately modest resource defaults and two replicas for the
+controller and external scaler. Treat them as a safe starting point, then tune
+them from real Prometheus and database measurements. Do not remove CPU or
+memory requests from your application workloads: ReplicaSense needs them to
+decide whether speculative replicas fit in cluster headroom.
+
+For a production change review, keep a values file in your own configuration
+repository. This is a useful minimum:
+
+```yaml
+clusterID: production-eu-1
+imagePullPolicy: IfNotPresent
+
+components:
+  scaler:
+    replicas: 2
+    image:
+      repository: ghcr.io/canberkturan/replicasense-scaler
+      # A digest takes precedence over tag and is preferred after approval.
+      digest: sha256:REPLACE_WITH_APPROVED_DIGEST
+  forecaster:
+    resources:
+      requests: {cpu: 500m, memory: 1Gi}
+      limits: {cpu: "2", memory: 2Gi}
+    env:
+      REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET: "40"
+      REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION: "0.20"
+```
+
+Use `helm upgrade --install ... -f production-values.yaml`. Pinning an image
+digest protects against an unexpected tag change; update it through your normal
+image-review process. The chart disables Kubernetes API token mounting for the
+sampler and scaler because those pods do not need it.
 
 ## 4. Add a predictive trigger to a workload
 
@@ -124,11 +164,17 @@ default model engine. After a workload is changed to XGBoost, prediction stays
 fail-closed until its first validated model is active; the native KEDA trigger
 continues to work during that period.
 
+For common model choices, training behavior, and the meaning of a
+horizon-maximum forecast, see [architecture.md](architecture.md). A forecast
+that barely changes from one minute to the next is not automatically stuck: it
+is one estimate of the maximum over the configured horizon, and stable inputs
+often lead to the same model region and a similar answer.
+
 ## 5. Observe and operate
 
 Start with the [metrics reference](metrics.md). It explains the source-demand,
-forecast, surge, safe-replica, snapshot-age, and model metrics exposed by the
-sampler and forecaster.
+forecast, surge, safe-replica, snapshot-age, model, scaler, cycle-health, and
+cluster-budget metrics.
 
 ```bash
 kubectl -n replicasense-system get scaledobjects,keda,svc
@@ -138,7 +184,8 @@ kubectl -n replicasense-system logs deployment/replicasense-forecaster --tail=10
 
 For production hardening, use image digests after release approval, restrict
 who can change `ScaledObject` resources, apply NetworkPolicies appropriate to
-your cluster, and monitor database capacity and scaler endpoint availability.
+your cluster, and monitor database capacity, scaler request outcomes, and
+forecast/sampler last-success timestamps.
 The chart runs containers as non-root with a read-only root filesystem, dropped
 Linux capabilities, and RuntimeDefault seccomp.
 

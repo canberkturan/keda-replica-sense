@@ -21,6 +21,12 @@ helm upgrade --install replicasense ./charts/replicasense \
 The chart creates ServiceMonitors by default. If Prometheus Operator is not
 installed, set `serviceMonitor.enabled=false`.
 
+Every long-running component has resource requests and limits by default. The
+controller and external scaler each have two replicas and a PDB. For a
+production installation, put reviewed resource settings and image digests in a
+values file. An image `digest`, when set for a component, takes precedence over
+its `tag`.
+
 Published releases are available as an OCI chart. For example, after the
 `v0.2.6` Git tag completes the release workflow:
 
@@ -37,3 +43,7 @@ training run stores an immutable candidate; it is activated only after the
 promotion policy accepts its no-leakage validation results. Users do not create
 or promote Jobs. If you mirror the chart to a private registry, authenticate
 with that registry before installation.
+
+For topology, model behavior, automatic training, and capacity guardrails, see
+the [architecture guide](../../docs/architecture.md). For available dashboard
+and alert queries, see the [metrics reference](../../docs/metrics.md).
