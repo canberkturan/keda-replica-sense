@@ -1,7 +1,7 @@
 # Artifact Hub KEDA scaler metadata
 
 This directory is an Artifact Hub repository of kind **KEDA Scalers**. The
-current published package metadata is under `replicasense/0.3.0`.
+current published package metadata is under `replicasense/0.3.1`.
 
 To publish it, add this Git repository to Artifact Hub as a **KEDA Scalers**
 repository using:
