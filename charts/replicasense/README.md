@@ -18,8 +18,15 @@ helm upgrade --install replicasense ./charts/replicasense \
   --set clusterID=YOUR_CLUSTER_ID
 ```
 
-The chart creates ServiceMonitors by default. If Prometheus Operator is not
-installed, set `serviceMonitor.enabled=false`.
+The chart creates ServiceMonitors by default, labeled for the conventional
+`kube-prometheus-stack` release name, `monitoring`. If your Prometheus release
+uses another selector label, set it at install time; for example:
+
+```bash
+--set-string serviceMonitor.labels.release=observability
+```
+
+If Prometheus Operator is not installed, set `serviceMonitor.enabled=false`.
 
 Every long-running component has resource requests and limits by default. The
 controller and external scaler each have two replicas and a PDB. For a

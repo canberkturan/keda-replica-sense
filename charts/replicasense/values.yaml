@@ -10,7 +10,11 @@ imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 serviceMonitor:
   enabled: true
-  labels: {}
+  # kube-prometheus-stack selects ServiceMonitors by its Helm release label.
+  # Change this when that release has a different name (for example,
+  # `--set-string serviceMonitor.labels.release=observability`).
+  labels:
+    release: monitoring
   interval: 15s
 
 components:
@@ -38,7 +42,7 @@ components:
       REPLICASENSE_TRAINER_JOB_CLEANUP_INTERVAL: 24h
       # Keep the production-safe 7d floor. This may be lowered only for an
       # intentionally accelerated, non-production benchmark environment.
-      REPLICASENSE_MIN_TRAINING_WINDOW: 7d
+      REPLICASENSE_MIN_TRAINING_WINDOW: 168h
     probes:
       readiness: {httpGet: {path: /readyz, port: health}}
       liveness: {httpGet: {path: /healthz, port: health}, initialDelaySeconds: 60}
