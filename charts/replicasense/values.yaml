@@ -36,9 +36,12 @@ components:
                   app.kubernetes.io/component: controller
     env:
       REPLICASENSE_TRAINER_JOB_CLEANUP_INTERVAL: 24h
+      # Keep the production-safe 7d floor. This may be lowered only for an
+      # intentionally accelerated, non-production benchmark environment.
+      REPLICASENSE_MIN_TRAINING_WINDOW: 7d
     probes:
       readiness: {httpGet: {path: /readyz, port: health}}
-      liveness: {httpGet: {path: /healthz, port: health}}
+      liveness: {httpGet: {path: /healthz, port: health}, initialDelaySeconds: 60}
   sampler:
     replicas: 1
     image: {repository: ghcr.io/canberkturan/replicasense-sampler, tag: "0.3.1", digest: ""}
@@ -48,7 +51,7 @@ components:
       limits: {cpu: 500m, memory: 256Mi}
     probes:
       readiness: {tcpSocket: {port: metrics}}
-      liveness: {tcpSocket: {port: metrics}}
+      liveness: {tcpSocket: {port: metrics}, initialDelaySeconds: 60}
     env:
       # Maximum source-history interval fetched after a Prometheus query
       # recovers. Larger values can repair longer outages but cost more query
@@ -100,6 +103,13 @@ components:
     env:
       REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.3.1-xgboost
       REPLICASENSE_TRAINING_INTERVAL: 24h
+      # Scheduling cadence and loop polling are intentionally separate: the
+      # latter makes immediateTraining responsive without creating daily Jobs.
+      REPLICASENSE_TRAINING_POLL_INTERVAL: 1m
+      REPLICASENSE_TRAINER_SEASONAL_PERIOD: 24h
+      # Keep production strict: source gaps over two sampling intervals reject
+      # training rather than silently fitting an interrupted time series.
+      REPLICASENSE_TRAINER_MAX_GAP_INTERVALS: "2"
 
 trainer:
   images:

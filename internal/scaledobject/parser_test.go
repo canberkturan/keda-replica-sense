@@ -2,6 +2,7 @@ package scaledobject
 
 import (
 	"testing"
+	"time"
 )
 
 func TestParse(t *testing.T) {
@@ -73,6 +74,20 @@ func TestParse(t *testing.T) {
 				t.Fatalf("valid spec = %t, want %t; violations: %#v", got, test.valid, result.Candidates[0].Violations)
 			}
 		})
+	}
+}
+
+func TestParseAllowsConfiguredShortTrainingWindow(t *testing.T) {
+	options := ParserOptions{
+		ClusterID:              "cluster-a",
+		ScalerAddresses:        map[string]struct{}{"replicasense.default.svc:6000": {}},
+		DefaultMaxReplicaCount: 100,
+		MinimumTrainingWindow:  12 * time.Hour,
+	}
+	input := withMetadata(validInput(), "trainingWindow", "12h")
+	result := Parse(input, options)
+	if len(result.Candidates) != 1 || result.Candidates[0].Spec == nil {
+		t.Fatalf("Parse() = %#v, want a valid short-window candidate", result)
 	}
 }
 

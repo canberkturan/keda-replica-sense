@@ -3,7 +3,9 @@ package kube
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -34,6 +36,8 @@ type TrainingJobCreator struct {
 	TTLSecondsAfter    int32
 	ActiveDeadlineSecs int64
 	Resources          corev1.ResourceRequirements
+	SeasonalPeriod     time.Duration
+	MaxGapIntervals    int
 }
 
 func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error {
@@ -60,12 +64,20 @@ func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error 
 	if pullPolicy != corev1.PullAlways && pullPolicy != corev1.PullIfNotPresent && pullPolicy != corev1.PullNever {
 		return fmt.Errorf("training Job creator has invalid image pull policy %q", pullPolicy)
 	}
+	seasonalPeriod := c.SeasonalPeriod
+	if seasonalPeriod <= 0 {
+		seasonalPeriod = 24 * time.Hour
+	}
+	maxGapIntervals := c.MaxGapIntervals
+	if maxGapIntervals <= 0 {
+		maxGapIntervals = 2
+	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: trainingJobName(run.RunID), Namespace: c.Namespace, Labels: map[string]string{"app": "replicasense-trainer", "replicasense.keda.sh/training-run": run.RunID}},
 		Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, ActiveDeadlineSeconds: &deadline, Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "replicasense-trainer"}},
 			Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, ServiceAccountName: c.ServiceAccount, AutomountServiceAccountToken: ptr.To(false), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr.To(true), RunAsUser: ptr.To(int64(65532)), RunAsGroup: ptr.To(int64(65532)), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Volumes: []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}, Containers: []corev1.Container{{Name: "trainer", Image: image, ImagePullPolicy: pullPolicy, Resources: c.Resources, SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), ReadOnlyRootFilesystem: ptr.To(true), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}, VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}}, Env: []corev1.EnvVar{
-				{Name: "REPLICASENSE_DATABASE_URL", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: c.DatabaseSecretName}, Key: c.DatabaseSecretKey}}}, {Name: "REPLICASENSE_CLUSTER_ID", Value: run.ClusterID}, {Name: "REPLICASENSE_WORKLOAD_ID", Value: run.WorkloadID}, {Name: "REPLICASENSE_TRAINING_RUN_ID", Value: run.RunID}, {Name: "REPLICASENSE_MODEL_ENGINE", Value: run.Engine}, {Name: "REPLICASENSE_POLICY_REVISION", Value: run.PolicyRevision},
+				{Name: "REPLICASENSE_DATABASE_URL", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: c.DatabaseSecretName}, Key: c.DatabaseSecretKey}}}, {Name: "REPLICASENSE_CLUSTER_ID", Value: run.ClusterID}, {Name: "REPLICASENSE_WORKLOAD_ID", Value: run.WorkloadID}, {Name: "REPLICASENSE_TRAINING_RUN_ID", Value: run.RunID}, {Name: "REPLICASENSE_MODEL_ENGINE", Value: run.Engine}, {Name: "REPLICASENSE_POLICY_REVISION", Value: run.PolicyRevision}, {Name: "REPLICASENSE_SEASONAL_PERIOD_SECONDS", Value: strconv.FormatInt(int64(seasonalPeriod/time.Second), 10)}, {Name: "REPLICASENSE_MAX_GAP_INTERVALS", Value: strconv.Itoa(maxGapIntervals)},
 			}}},
 			}},
 		},

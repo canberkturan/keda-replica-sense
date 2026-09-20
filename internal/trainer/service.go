@@ -41,6 +41,13 @@ type Service struct {
 	Runs                   Runs
 	Models                 Models
 	ExpectedPolicyRevision string
+	// SeasonalPeriod is normally 24h. It is injected by the scheduler into
+	// each Job so an explicitly accelerated laboratory can preserve its
+	// simulated calendar without weakening the production default.
+	SeasonalPeriod time.Duration
+	// MaxGapIntervals bounds tolerated source gaps. The production default is
+	// conservative; accelerated labs may opt into a larger value.
+	MaxGapIntervals int
 }
 
 func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine string, now time.Time) (err error) {
@@ -81,15 +88,26 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if err != nil {
 		return err
 	}
-	minimum := int((24 * time.Hour) / workload.Spec.Forecast.SamplingInterval)
-	if err := dataset.Validate(samples, dataset.QualityPolicy{MinSamples: minimum, SamplingInterval: workload.Spec.Forecast.SamplingInterval, MaxGapIntervals: 2}); err != nil {
+	seasonalPeriod := s.SeasonalPeriod
+	if seasonalPeriod <= 0 {
+		seasonalPeriod = 24 * time.Hour
+	}
+	if seasonalPeriod%workload.Spec.Forecast.SamplingInterval != 0 {
+		return fmt.Errorf("seasonal period %s must be an exact multiple of sampling interval %s", seasonalPeriod, workload.Spec.Forecast.SamplingInterval)
+	}
+	minimum := int(seasonalPeriod / workload.Spec.Forecast.SamplingInterval)
+	maxGapIntervals := s.MaxGapIntervals
+	if maxGapIntervals <= 0 {
+		maxGapIntervals = 2
+	}
+	if err := dataset.Validate(samples, dataset.QualityPolicy{MinSamples: minimum, SamplingInterval: workload.Spec.Forecast.SamplingInterval, MaxGapIntervals: maxGapIntervals}); err != nil {
 		return err
 	}
 	location, err := time.LoadLocation(workload.Spec.Forecast.BusinessTimezone)
 	if err != nil {
 		return fmt.Errorf("load workload business timezone: %w", err)
 	}
-	request := forecast.Request{Horizon: workload.Spec.Forecast.DecisionHorizon(), SamplingInterval: workload.Spec.Forecast.SamplingInterval, SeasonalPeriod: 24 * time.Hour, Quantile: workload.Spec.Forecast.Quantile, BusinessLocation: location}
+	request := forecast.Request{Horizon: workload.Spec.Forecast.DecisionHorizon(), SamplingInterval: workload.Spec.Forecast.SamplingInterval, SeasonalPeriod: seasonalPeriod, Quantile: workload.Spec.Forecast.Quantile, BusinessLocation: location}
 	var model forecast.Model
 	var validation forecast.ValidationMetrics
 	var artifact []byte

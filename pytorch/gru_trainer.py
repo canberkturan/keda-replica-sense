@@ -149,7 +149,7 @@ def validation(samples, steps, sampling_seconds, minimum, scale, location, quant
         raise RuntimeError("insufficient temporal validation windows")
     coverage = under = mae = pinball_loss = 0.0
     seasonal_coverage = seasonal_under = seasonal_mae = seasonal_pinball = 0.0
-    season = max(1, int(24 * 60 * 60 / sampling_seconds))
+    season = max(1, int(os.getenv("REPLICASENSE_SEASONAL_PERIOD_SECONDS", "86400")) // sampling_seconds)
     for end in test_indexes:
         actual = max(value for _, value in samples[end + 1:end + steps + 1])
         upper = max(predict(p50, samples, end, minimum, scale, location), predict(p95, samples, end, minimum, scale, location) + offset)
@@ -214,11 +214,17 @@ def main():
             cursor.execute("SELECT observed_at, observed_value FROM samples WHERE cluster_id=%s AND workload_id=%s AND source_fingerprint=%s AND observed_at >= %s AND observed_at <= %s ORDER BY observed_at", (contract.cluster_id, contract.workload_id, contract.source_fingerprint, start, end))
             samples = [(row["observed_at"], float(row["observed_value"])) for row in cursor.fetchall()]
             steps = contract.horizon_seconds // contract.sampling_seconds
-            if steps < 1 or len(samples) < max(SEQUENCE + steps + 288, int(24 * 60 * 60 / contract.sampling_seconds)):
+            seasonal_seconds = int(os.getenv("REPLICASENSE_SEASONAL_PERIOD_SECONDS", "86400"))
+            if seasonal_seconds <= 0:
+                raise RuntimeError("REPLICASENSE_SEASONAL_PERIOD_SECONDS must be positive")
+            if steps < 1 or len(samples) < max(SEQUENCE + steps + 288, seasonal_seconds // contract.sampling_seconds):
                 raise RuntimeError("insufficient samples for PyTorch GRU training")
+            max_gap_intervals = int(os.getenv("REPLICASENSE_MAX_GAP_INTERVALS", "2"))
+            if max_gap_intervals <= 0:
+                raise RuntimeError("REPLICASENSE_MAX_GAP_INTERVALS must be positive")
             for previous, current in zip(samples, samples[1:]):
-                if (current[0] - previous[0]).total_seconds() > contract.sampling_seconds * 2:
-                    raise RuntimeError("training data has a gap larger than two sampling intervals")
+                if (current[0] - previous[0]).total_seconds() > contract.sampling_seconds * max_gap_intervals:
+                    raise RuntimeError(f"training data has a gap larger than {max_gap_intervals} sampling intervals")
             location = ZoneInfo(contract.timezone_name)
             values = [value for _, value in samples]
             minimum, scale = normalizer(values)

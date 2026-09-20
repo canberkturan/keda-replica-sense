@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	defaultHorizon          = 10 * time.Minute
-	defaultQuantile         = 0.95
-	defaultTrainingWindow   = 30 * 24 * time.Hour
-	defaultSamplingInterval = time.Minute
-	defaultModelEngine      = "xgboost"
+	defaultHorizon               = 10 * time.Minute
+	defaultQuantile              = 0.95
+	defaultTrainingWindow        = 30 * 24 * time.Hour
+	defaultSamplingInterval      = time.Minute
+	defaultModelEngine           = "xgboost"
+	defaultMinimumTrainingWindow = 7 * 24 * time.Hour
 )
 
 // Parse builds one candidate per ReplicaSense external trigger. It performs no
@@ -107,7 +108,7 @@ func parseCandidate(input ScaledObjectInput, options ParserOptions, predictive T
 		}
 	}
 
-	forecast := parseForecastConfig(predictive, add)
+	forecast := parseForecastConfig(predictive, options, add)
 	bounds := parseBounds(input, options, add)
 	if strings.TrimSpace(options.ClusterID) == "" || strings.TrimSpace(input.Namespace) == "" || strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.ScaleTargetName) == "" {
 		add("scaledObject", "has required top-level fields missing")
@@ -171,7 +172,7 @@ func parsePrometheusSource(trigger TriggerInput, add func(string, string)) domai
 	return domain.PrometheusSource{TriggerName: trigger.Name, ServerAddress: serverAddress, Query: query, Threshold: threshold}
 }
 
-func parseForecastConfig(trigger TriggerInput, add func(string, string)) domain.ForecastConfig {
+func parseForecastConfig(trigger TriggerInput, options ParserOptions, add func(string, string)) domain.ForecastConfig {
 	horizon := parseDuration(trigger.Metadata["forecastHorizon"], defaultHorizon, "metadata.forecastHorizon", add)
 	trainingWindow := parseDuration(trigger.Metadata["trainingWindow"], defaultTrainingWindow, "metadata.trainingWindow", add)
 	samplingInterval := parseDuration(trigger.Metadata["samplingInterval"], defaultSamplingInterval, "metadata.samplingInterval", add)
@@ -187,8 +188,12 @@ func parseForecastConfig(trigger TriggerInput, add func(string, string)) domain.
 	if engine != defaultModelEngine && engine != "seasonal-baseline" && engine != "rolling-quantile" && engine != "holt-winters" && engine != "xgboost" && engine != "gru" {
 		add("metadata.modelEngine", fmt.Sprintf("unsupported model engine %q", engine))
 	}
-	if trainingWindow < 7*24*time.Hour || trainingWindow > 90*24*time.Hour {
-		add("metadata.trainingWindow", "must be between 7d and 90d")
+	minimumTrainingWindow := options.MinimumTrainingWindow
+	if minimumTrainingWindow <= 0 {
+		minimumTrainingWindow = defaultMinimumTrainingWindow
+	}
+	if trainingWindow < minimumTrainingWindow || trainingWindow > 90*24*time.Hour {
+		add("metadata.trainingWindow", fmt.Sprintf("must be between %s and 90d", formatTrainingWindow(minimumTrainingWindow)))
 	}
 	if trainingWindow%time.Second != 0 {
 		add("metadata.trainingWindow", "must be an exact number of seconds")
@@ -211,6 +216,13 @@ func parseForecastConfig(trigger TriggerInput, add func(string, string)) domain.
 		add("metadata.businessTimezone", "must be a valid IANA timezone, for example Europe/Istanbul")
 	}
 	return domain.ForecastConfig{Horizon: horizon, Quantile: quantile, TrainingWindow: trainingWindow, SamplingInterval: samplingInterval, ModelEngine: engine, BusinessTimezone: timezone, StartupLatency: startupLatency, SafetyBuffer: safetyBuffer, ImmediateTraining: immediateTraining, ClearOldModels: clearOldModels}
+}
+
+func formatTrainingWindow(value time.Duration) string {
+	if value%(24*time.Hour) == 0 {
+		return fmt.Sprintf("%dd", value/(24*time.Hour))
+	}
+	return value.String()
 }
 
 func parseBool(raw, field string, add func(string, string)) bool {

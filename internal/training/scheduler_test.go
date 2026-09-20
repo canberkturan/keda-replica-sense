@@ -74,6 +74,21 @@ func TestSchedulerWaitsForImmediateTrainingHistory(t *testing.T) {
 	}
 }
 
+func TestImmediateTrainingAcceptsNearCompleteHighFrequencyHistory(t *testing.T) {
+	start := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
+	end := start.Add(12 * time.Hour)
+	coverage := workloadstore.SampleCoverage{
+		OldestObservedAt: start,
+		NewestObservedAt: end,
+		// 43,149 of 43,200 samples is 99.88% coverage: a realistic result
+		// for a one-second Prometheus-backed laboratory stream.
+		Count: 43149,
+	}
+	if !hasSufficientHistory(coverage, start, end, time.Second) {
+		t.Fatal("near-complete high-frequency history should be trainable")
+	}
+}
+
 type fakeWorkloads struct {
 	items []workloadstore.SamplingWorkload
 }

@@ -58,10 +58,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "REPLICASENSE_TRAINER_ACTIVE_DEADLINE_SECONDS:", err)
 		os.Exit(1)
 	}
+	seasonalPeriod := durationOrDefault("REPLICASENSE_TRAINER_SEASONAL_PERIOD", 24*time.Hour)
+	pollInterval := durationOrDefault("REPLICASENSE_TRAINING_POLL_INTERVAL", time.Minute)
+	maxGapIntervals, err := positiveInt64OrDefault(os.Getenv("REPLICASENSE_TRAINER_MAX_GAP_INTERVALS"), 2)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "REPLICASENSE_TRAINER_MAX_GAP_INTERVALS:", err)
+		os.Exit(1)
+	}
 	samples := postgres.NewSampleRepository(pool)
 	scheduler := training.Scheduler{
 		Workloads: samples, History: samples, Claims: postgres.NewTrainingRepository(pool),
-		Jobs:      kube.TrainingJobCreator{Client: client, Namespace: valueOrDefault("REPLICASENSE_SYSTEM_NAMESPACE", "replicasense-system"), Image: valueOrDefault("REPLICASENSE_TRAINER_IMAGE", "replicasense-trainer:latest"), EngineImages: map[string]string{"gru": os.Getenv("REPLICASENSE_TRAINER_IMAGE_GRU")}, ImagePullPolicy: corev1.PullPolicy(valueOrDefault("REPLICASENSE_TRAINER_IMAGE_PULL_POLICY", "IfNotPresent")), ServiceAccount: valueOrDefault("REPLICASENSE_TRAINER_SERVICE_ACCOUNT", "replicasense-trainer"), DatabaseSecretName: trainerDatabaseSecret, DatabaseSecretKey: valueOrDefault("REPLICASENSE_TRAINER_DATABASE_SECRET_KEY", "url"), Resources: resources, ActiveDeadlineSecs: activeDeadline},
+		Jobs:      kube.TrainingJobCreator{Client: client, Namespace: valueOrDefault("REPLICASENSE_SYSTEM_NAMESPACE", "replicasense-system"), Image: valueOrDefault("REPLICASENSE_TRAINER_IMAGE", "replicasense-trainer:latest"), EngineImages: map[string]string{"gru": os.Getenv("REPLICASENSE_TRAINER_IMAGE_GRU")}, ImagePullPolicy: corev1.PullPolicy(valueOrDefault("REPLICASENSE_TRAINER_IMAGE_PULL_POLICY", "IfNotPresent")), ServiceAccount: valueOrDefault("REPLICASENSE_TRAINER_SERVICE_ACCOUNT", "replicasense-trainer"), DatabaseSecretName: trainerDatabaseSecret, DatabaseSecretKey: valueOrDefault("REPLICASENSE_TRAINER_DATABASE_SECRET_KEY", "url"), Resources: resources, ActiveDeadlineSecs: activeDeadline, SeasonalPeriod: seasonalPeriod, MaxGapIntervals: int(maxGapIntervals)},
 		ClusterID: cluster, TrainingInterval: durationOrDefault("REPLICASENSE_TRAINING_INTERVAL", 24*time.Hour),
 	}
 	for {
@@ -71,7 +78,7 @@ func main() {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Minute):
+		case <-time.After(pollInterval):
 		}
 	}
 }

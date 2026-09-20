@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"time"
 
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
@@ -158,7 +159,17 @@ func hasSufficientHistory(coverage workloadstore.SampleCoverage, start, end time
 		return false
 	}
 	expected := int64(end.Sub(start) / interval)
-	minimumCount := expected - 2
+	// Prometheus queries are not a clock. At high sampling rates, a small
+	// number of scrape-alignment or scheduler-jitter gaps is normal; requiring
+	// every slot would keep an otherwise complete immediate-training window
+	// permanently pending. Keep a strong 99.8% coverage requirement, while the
+	// endpoint checks below still reject a stale or truncated history.
+	minimumCount := int64(math.Ceil(float64(expected) * 0.998))
+	// Preserve the two-sample allowance for short windows; for long windows,
+	// the percentage limit is the more realistic and still conservative guard.
+	if strictMinimum := expected - 2; strictMinimum < minimumCount {
+		minimumCount = strictMinimum
+	}
 	if minimumCount < 1 {
 		minimumCount = 1
 	}

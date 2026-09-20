@@ -53,6 +53,10 @@ func LoadController(lookup func(string) string) (Controller, error) {
 	if err != nil {
 		return Controller{}, fmt.Errorf("REPLICASENSE_TRAINER_JOB_CLEANUP_INTERVAL: %w", err)
 	}
+	minimumTrainingWindow, err := durationWithDefault(lookup("REPLICASENSE_MIN_TRAINING_WINDOW"), 7*24*time.Hour)
+	if err != nil {
+		return Controller{}, fmt.Errorf("REPLICASENSE_MIN_TRAINING_WINDOW: %w", err)
+	}
 
 	return Controller{
 		Parser: scaledobject.ParserOptions{
@@ -60,6 +64,7 @@ func LoadController(lookup func(string) string) (Controller, error) {
 			ScalerAddresses:        addresses,
 			DefaultMinReplicaCount: 0,
 			DefaultMaxReplicaCount: 100,
+			MinimumTrainingWindow:  minimumTrainingWindow,
 		},
 		MetricsBindAddress:        valueOrDefault(lookup("REPLICASENSE_METRICS_BIND_ADDRESS"), ":8080"),
 		HealthProbeBindAddress:    valueOrDefault(lookup("REPLICASENSE_HEALTH_PROBE_BIND_ADDRESS"), ":8081"),
