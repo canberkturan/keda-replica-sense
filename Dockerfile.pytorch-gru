@@ -1,0 +1,19 @@
+# CPU-only PyTorch Trainer. The serving path remains Go and receives a
+# tensor-only JSON artifact, so this image is used exclusively by short-lived
+# Kubernetes Jobs.
+FROM python:3.12-slim-trixie AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HOME=/tmp
+
+WORKDIR /app
+COPY pytorch/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY pytorch/gru_trainer.py ./gru_trainer.py
+RUN python -m py_compile /app/gru_trainer.py
+RUN useradd --uid 65532 --no-create-home --shell /usr/sbin/nologin replicasense
+USER 65532:65532
+ENTRYPOINT ["python", "/app/gru_trainer.py"]

@@ -65,3 +65,22 @@ func TestTrainingJobCreatorAppliesResourceAndExecutionBounds(t *testing.T) {
 		t.Fatalf("trainer CPU request = %q, want 500m", got)
 	}
 }
+
+func TestTrainingJobCreatorUsesEngineSpecificImageAndWritableTmp(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	creator := TrainingJobCreator{Client: client, Namespace: "system", Image: "trainer:go", EngineImages: map[string]string{"gru": "trainer:pytorch-gru"}, DatabaseSecretName: "database", DatabaseSecretKey: "url"}
+	if err := creator.Create(context.Background(), training.Job{RunID: "run-gru", ClusterID: "lab", WorkloadID: "workload-1", Engine: "gru", PolicyRevision: "revision-1"}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.BatchV1().Jobs("system").Get(context.Background(), trainingJobName("run-gru"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	container := job.Spec.Template.Spec.Containers[0]
+	if container.Image != "trainer:pytorch-gru" {
+		t.Fatalf("trainer image = %q", container.Image)
+	}
+	if len(container.VolumeMounts) != 1 || container.VolumeMounts[0].MountPath != "/tmp" || len(job.Spec.Template.Spec.Volumes) != 1 || job.Spec.Template.Spec.Volumes[0].EmptyDir == nil {
+		t.Fatalf("trainer must have an EmptyDir /tmp: %#v", job.Spec.Template.Spec)
+	}
+}

@@ -102,9 +102,14 @@ components:
       REPLICASENSE_TRAINING_INTERVAL: 24h
 
 trainer:
+  images:
+    # Leave empty until a matching PyTorch GRU image tag has been published.
+    # When set, only modelEngine: gru Jobs use this CPU-only image; all other
+    # engines continue using components.training-scheduler.env.REPLICASENSE_TRAINER_IMAGE.
+    gru: ""
   # These bounds apply to short-lived Trainer Jobs, not the scheduler pod.
-  # XGBoost training can be CPU and memory intensive; raise them only after
-  # measuring a realistic workload and retaining cluster headroom.
+  # XGBoost and PyTorch training can be CPU and memory intensive; raise them
+  # only after measuring a realistic workload and retaining cluster headroom.
   resources:
     requests: {cpu: 500m, memory: 512Mi}
     limits: {cpu: "2", memory: 2Gi}

@@ -48,6 +48,23 @@ func TestGRUArtifactRejectsWrongWeightShape(t *testing.T) {
 	}
 }
 
+func TestPyTorchGRUArtifactRoundTripUsesTensorOnlyInference(t *testing.T) {
+	hidden := 2
+	network := pytorchGRUNetworkData{WeightIH: make([]float64, 3*hidden*gruInputSize), WeightHH: make([]float64, 3*hidden*hidden), BiasIH: make([]float64, 3*hidden), BiasHH: make([]float64, 3*hidden), Head: make([]float64, hidden), HeadBias: .5}
+	artifact, err := json.Marshal(pytorchGRUArtifact{Engine: "gru", Format: pytorchGRUFormat, FeatureSchema: PyTorchGRUFeatureSchema, UpperQuantile: .95, Sequence: gruSequenceLength, Inputs: gruInputSize, Hidden: hidden, ValueScale: 10, P50: network, P95: network})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := LoadModel(StoredModel{ID: "pytorch-gru", Engine: "gru", Artifact: artifact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prediction, err := model.PredictSamples(gruTestSamples(180), Request{Horizon: 5 * time.Minute, SamplingInterval: time.Minute, Quantile: .95, BusinessLocation: time.UTC})
+	if err != nil || prediction.P50 != 5 || prediction.P95 != 5 {
+		t.Fatalf("prediction = %#v, %v", prediction, err)
+	}
+}
+
 func TestGRUCalendarInputIncludesBusinessDayAndClock(t *testing.T) {
 	location := time.FixedZone("business", 3*60*60)
 	input := gruInput(domain.Sample{ObservedAt: time.Date(2026, time.September, 20, 9, 30, 0, 0, time.UTC), ObservedValue: 15}, 5, 10, location)

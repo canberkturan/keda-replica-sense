@@ -90,6 +90,10 @@ spec:
               value: {{ $root.Values.trainer.resources.limits.memory | quote }}
             - name: REPLICASENSE_TRAINER_ACTIVE_DEADLINE_SECONDS
               value: {{ $root.Values.trainer.activeDeadlineSeconds | quote }}
+            {{- with $root.Values.trainer.images.gru }}
+            - name: REPLICASENSE_TRAINER_IMAGE_GRU
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- range $key, $value := $config.env }}
             - name: {{ $key }}

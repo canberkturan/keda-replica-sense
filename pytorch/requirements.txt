@@ -1,0 +1,7 @@
+# Keep the runtime CPU-only: no CUDA wheels are installed in cluster Trainer
+# Jobs. NumPy is explicit because PyTorch otherwise emits a runtime warning.
+--index-url https://pypi.org/simple
+--extra-index-url https://download.pytorch.org/whl/cpu
+psycopg[binary]==3.2.10
+numpy==2.2.6
+torch==2.7.1+cpu

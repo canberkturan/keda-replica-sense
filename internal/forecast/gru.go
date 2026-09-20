@@ -203,6 +203,15 @@ func ValidateGRU(samples []domain.Sample, request Request, maxWindows int) (Vali
 }
 
 func loadGRUArtifact(id string, artifactBytes []byte) (Model, error) {
+	var marker struct {
+		Format string `json:"format"`
+	}
+	if err := json.Unmarshal(artifactBytes, &marker); err != nil {
+		return nil, fmt.Errorf("decode gru artifact %s: %w", id, err)
+	}
+	if marker.Format == pytorchGRUFormat {
+		return loadPyTorchGRUArtifact(id, artifactBytes)
+	}
 	var artifact gruArtifact
 	if err := json.Unmarshal(artifactBytes, &artifact); err != nil {
 		return nil, fmt.Errorf("decode gru artifact %s: %w", id, err)

@@ -58,6 +58,16 @@ for explicitly configured baseline and rolling-quantile engines.
 The CI workflow verifies both the portable build and `go test -tags xgboost
 ./...` inside this reproducible native XGBoost build environment.
 
+For `modelEngine: gru`, ReplicaSense can route only the short-lived Trainer
+Job to the CPU-only PyTorch image. The artifact contains numeric tensors, not
+pickle or TorchScript; the Go forecaster validates and evaluates it locally.
+Set `trainer.images.gru` to the published `replicasense-trainer:<version>-pytorch-gru`
+tag. GRU candidates must still pass the same temporal validation and promotion
+gate as every other model.
+
+See [the PyTorch GRU guide](docs/pytorch-gru.md) for the CPU image, resource
+budget, temporal validation, and promotion behaviour.
+
 ## Safety boundary
 
 Native KEDA Prometheus triggers remain the reactive safety path. Predictive
