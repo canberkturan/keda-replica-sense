@@ -18,7 +18,7 @@ components:
     replicas: 2
     # Set digest (for example sha256:...) in production to pin an image by
     # content. When digest is set it takes precedence over tag.
-    image: {repository: ghcr.io/canberkturan/replicasense-controller, tag: "0.3.1", digest: ""}
+    image: {repository: ghcr.io/canberkturan/replicasense-controller, tag: "0.3.2", digest: ""}
     serviceAccount: controller
     ports: [{name: metrics, containerPort: 8080}, {name: health, containerPort: 8081}]
     resources:
@@ -44,7 +44,7 @@ components:
       liveness: {httpGet: {path: /healthz, port: health}, initialDelaySeconds: 60}
   sampler:
     replicas: 1
-    image: {repository: ghcr.io/canberkturan/replicasense-sampler, tag: "0.3.1", digest: ""}
+    image: {repository: ghcr.io/canberkturan/replicasense-sampler, tag: "0.3.2", digest: ""}
     ports: [{name: metrics, containerPort: 8080}]
     resources:
       requests: {cpu: 100m, memory: 128Mi}
@@ -59,7 +59,7 @@ components:
       REPLICASENSE_SAMPLING_RECOVERY_WINDOW: 24h
   scaler:
     replicas: 2
-    image: {repository: ghcr.io/canberkturan/replicasense-scaler, tag: "0.3.1", digest: ""}
+    image: {repository: ghcr.io/canberkturan/replicasense-scaler, tag: "0.3.2", digest: ""}
     ports: [{name: grpc, containerPort: 6000}, {name: metrics, containerPort: 8080}]
     resources:
       requests: {cpu: 100m, memory: 128Mi}
@@ -79,7 +79,7 @@ components:
     env: {}
   forecaster:
     replicas: 1
-    image: {repository: ghcr.io/canberkturan/replicasense-forecaster, tag: "0.3.1-xgboost", digest: ""}
+    image: {repository: ghcr.io/canberkturan/replicasense-forecaster, tag: "0.3.2-xgboost", digest: ""}
     serviceAccount: forecaster
     ports: [{name: metrics, containerPort: 8080}]
     resources:
@@ -94,14 +94,14 @@ components:
       REPLICASENSE_MODEL_MAX_AGE: 72h
   training-scheduler:
     replicas: 1
-    image: {repository: ghcr.io/canberkturan/replicasense-training-scheduler, tag: "0.3.1", digest: ""}
+    image: {repository: ghcr.io/canberkturan/replicasense-training-scheduler, tag: "0.3.2", digest: ""}
     serviceAccount: training-scheduler
     ports: []
     resources:
       requests: {cpu: 100m, memory: 128Mi}
       limits: {cpu: 500m, memory: 256Mi}
     env:
-      REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.3.1-xgboost
+      REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.3.2-xgboost
       REPLICASENSE_TRAINING_INTERVAL: 24h
       # Scheduling cadence and loop polling are intentionally separate: the
       # latter makes immediateTraining responsive without creating daily Jobs.

@@ -69,7 +69,7 @@ clusters; it does not need to be globally public.
 ```bash
 helm upgrade --install replicasense \
   oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.3.1 \
+  --version 0.3.2 \
   --namespace replicasense-system \
   --set clusterID=cluster-east-1
 ```
