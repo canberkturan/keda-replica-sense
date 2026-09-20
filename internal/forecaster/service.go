@@ -53,7 +53,17 @@ func (s Service) Forecast(ctx context.Context, workload workloadstore.SamplingWo
 	if minimum < 1 {
 		minimum = int(s.SeasonalPeriod / interval)
 	}
-	if err := dataset.Validate(samples, dataset.QualityPolicy{MinSamples: minimum, SamplingInterval: interval, MaxGapIntervals: 2}); err != nil {
+	policy := dataset.QualityPolicy{MinSamples: minimum, SamplingInterval: interval, MaxGapIntervals: 2}
+	// A Prometheus outage must not poison a rolling 30-day inference window for
+	// 30 days. Use only the newest continuous source-data segment after a gap.
+	// We still require the normal minimum history and never synthesize values.
+	recovered := dataset.MostRecentContiguous(samples, policy)
+	usedRecoverySegment := len(recovered) != len(samples)
+	samples = recovered
+	if err := dataset.Validate(samples, policy); err != nil {
+		return domain.ForecastSnapshot{}, err
+	}
+	if err := dataset.ValidateFresh(samples, end, policy); err != nil {
 		return domain.ForecastSnapshot{}, err
 	}
 	period := s.SeasonalPeriod
@@ -92,6 +102,9 @@ func (s Service) Forecast(ctx context.Context, workload workloadstore.SamplingWo
 	raw := prediction.P95
 	surgeDemand := 0.0
 	reason := "baseline_replicas"
+	if usedRecoverySegment {
+		reason += ";recovered_after_source_gap"
+	}
 	if surge.Triggered && surge.Demand > raw {
 		raw = surge.Demand
 		surgeDemand = surge.Demand

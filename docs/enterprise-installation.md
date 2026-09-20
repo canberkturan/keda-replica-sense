@@ -122,6 +122,12 @@ components:
     env:
       REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET: "40"
       REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION: "0.20"
+  sampler:
+    env:
+      # Limits post-outage history repair. Keep it within Prometheus query
+      # capacity; if history cannot be recovered, forecasts wait for a clean
+      # continuous segment instead.
+      REPLICASENSE_SAMPLING_RECOVERY_WINDOW: 24h
 ```
 
 Use `helm upgrade --install ... -f production-values.yaml`. Pinning an image
@@ -258,6 +264,12 @@ validated before promotion; rejected candidates stay auditable in PostgreSQL.
 - Surge detection is deterministic and independent of the ML forecast. It acts
   only for the time a new pod needs to become useful, not for the whole ML
   horizon.
+- If Prometheus or the source series is unavailable, ReplicaSense withholds
+  predictive metrics once their input ages past the freshness limit; the native
+  KEDA trigger remains the reactive path. After recovery it range-backfills a
+  bounded recent gap when Prometheus can supply authoritative history. If that
+  is not possible, it resumes only after collecting a valid continuous segment
+  and never fabricates missing demand values.
 - If every external-scaler Service endpoint is unavailable, KEDA cannot obtain
   that external metric. Restore a scaler endpoint; the combined `ScaledObject`
   cannot use its reactive path during this KEDA discovery failure.

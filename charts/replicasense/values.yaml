@@ -49,7 +49,11 @@ components:
     probes:
       readiness: {tcpSocket: {port: metrics}}
       liveness: {tcpSocket: {port: metrics}}
-    env: {}
+    env:
+      # Maximum source-history interval fetched after a Prometheus query
+      # recovers. Larger values can repair longer outages but cost more query
+      # work; missing history is never invented.
+      REPLICASENSE_SAMPLING_RECOVERY_WINDOW: 24h
   scaler:
     replicas: 2
     image: {repository: ghcr.io/canberkturan/replicasense-scaler, tag: "0.3.0", digest: ""}

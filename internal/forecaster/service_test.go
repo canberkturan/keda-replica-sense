@@ -24,6 +24,20 @@ func (s *snapshots) SaveSnapshot(_ context.Context, v domain.ForecastSnapshot) e
 func (s *snapshots) LatestSnapshot(context.Context, forecast.Lookup) (*domain.ForecastSnapshot, error) {
 	return &s.s, nil
 }
+
+type capturingModel struct{ received []domain.Sample }
+
+func (m *capturingModel) Engine() string { return "test" }
+func (m *capturingModel) PredictSamples(samples []domain.Sample, _ forecast.Request) (forecast.Prediction, error) {
+	m.received = append([]domain.Sample(nil), samples...)
+	return forecast.Prediction{P50: 1, P95: 1}, nil
+}
+
+type staticModels struct{ model forecast.Model }
+
+func (m staticModels) ModelFor(workloadstore.SamplingWorkload) (forecast.Model, bool) {
+	return m.model, true
+}
 func TestForecast(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	vals := []domain.Sample{{ObservedAt: start, ObservedValue: 1}, {ObservedAt: start.Add(time.Minute), ObservedValue: 2}, {ObservedAt: start.Add(2 * time.Minute), ObservedValue: 3}, {ObservedAt: start.Add(3 * time.Minute), ObservedValue: 4}}
@@ -32,6 +46,41 @@ func TestForecast(t *testing.T) {
 	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 4}.Forecast(context.Background(), w, start.Add(4*time.Minute))
 	if err != nil || got.SafeDemand != 3 {
 		t.Fatalf("%#v %v", got, err)
+	}
+}
+
+func TestForecastUsesContinuousSuffixAfterSourceOutage(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vals := []domain.Sample{
+		{ObservedAt: start, ObservedValue: 1},
+		{ObservedAt: start.Add(time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(2 * time.Minute), ObservedValue: 1},
+		{ObservedAt: start.Add(10 * time.Minute), ObservedValue: 2},
+		{ObservedAt: start.Add(11 * time.Minute), ObservedValue: 2},
+		{ObservedAt: start.Add(12 * time.Minute), ObservedValue: 2},
+		{ObservedAt: start.Add(13 * time.Minute), ObservedValue: 2},
+	}
+	model, out := &capturingModel{}, &snapshots{}
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 3}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 14 * time.Minute, Horizon: time.Minute}}}
+	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 4, Models: staticModels{model: model}}.Forecast(context.Background(), w, start.Add(14*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(model.received) != 4 || !model.received[0].ObservedAt.Equal(start.Add(10*time.Minute)) {
+		t.Fatalf("model received %#v, want only post-outage observations", model.received)
+	}
+	if got.SafetyReason != "baseline_replicas;recovered_after_source_gap;rate_limited" {
+		t.Fatalf("safety reason = %q", got.SafetyReason)
+	}
+}
+
+func TestForecastRejectsStaleSourceData(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	vals := []domain.Sample{{ObservedAt: start, ObservedValue: 1}, {ObservedAt: start.Add(time.Minute), ObservedValue: 1}, {ObservedAt: start.Add(2 * time.Minute), ObservedValue: 1}, {ObservedAt: start.Add(3 * time.Minute), ObservedValue: 1}}
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 3}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 4 * time.Minute, Horizon: time.Minute}}}
+	_, err := Service{Samples: samples{vals}, Snapshots: &snapshots{}, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 4}.Forecast(context.Background(), w, start.Add(6*time.Minute))
+	if err == nil {
+		t.Fatal("want stale-source error")
 	}
 }
 

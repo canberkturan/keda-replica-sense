@@ -61,7 +61,10 @@ The CI workflow verifies both the portable build and `go test -tags xgboost
 ## Safety boundary
 
 Native KEDA Prometheus triggers remain the reactive safety path. Predictive
-snapshots fail closed when stale or unsafe. ReplicaSense deploys two scaler
+snapshots fail closed when their generation time or underlying source sample is
+stale or unsafe. After a source query recovers, ReplicaSense repairs a bounded
+recent gap only from Prometheus range-query data; otherwise it resumes from a
+continuous post-outage segment without inventing observations. ReplicaSense deploys two scaler
 replicas, a PDB, and preferred cross-node anti-affinity; a single scaler-pod
 loss continues serving metrics. **Accepted catastrophic-outage limitation:**
 if every external-scaler Service endpoint is lost, KEDA fails while discovering

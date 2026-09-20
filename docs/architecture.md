@@ -55,8 +55,8 @@ The chart uses a small, purposeful topology:
 | Component | Default replicas | Why it exists | Failure behavior |
 | --- | ---: | --- | --- |
 | Controller | 2 | Watches ScaledObjects and keeps contracts current. | Leader election allows one active reconciler; the other is standby. |
-| Sampler | 1 | Backfills and persists Prometheus samples. | Sampling pauses; old forecasts eventually become stale and are withheld. |
-| Forecaster | 1 | Generates forecasts, runs guardrails, and evaluates mature snapshots. | No new prediction is served after the freshness window. |
+| Sampler | 1 | Backfills and persists Prometheus samples. | Sampling pauses; old forecasts eventually become stale and are withheld. When a source query recovers, ReplicaSense attempts a bounded, authoritative range repair of the recent gap. |
+| Forecaster | 1 | Generates forecasts, runs guardrails, and evaluates mature snapshots. | No new prediction is served after the freshness window. A valid continuous post-outage segment can resume inference without waiting for a historical gap to age out of the whole training window. |
 | External scaler | 2 | KEDA gRPC endpoint. | A PDB and preferred cross-node placement protect one-pod loss. |
 | Training scheduler | 1 | Creates daily per-workload Trainer Jobs. | Existing active models continue until their maximum age. |
 | Trainer Job | on demand | Trains and validates one workload model. | A failed candidate is not promoted. |

@@ -24,7 +24,11 @@ type Server struct {
 		LatestSnapshot(context.Context, forecast.Lookup) (*domain.ForecastSnapshot, error)
 	}
 	SnapshotMaxAge time.Duration
-	Observer       interface {
+	// SourceMaxAge independently bounds the age of the observation used to make
+	// a snapshot. GeneratedAt alone is insufficient because a forecaster could
+	// otherwise keep regenerating a prediction from frozen source data.
+	SourceMaxAge time.Duration
+	Observer     interface {
 		RecordRequest(method string, served bool, age time.Duration)
 	}
 }
@@ -85,7 +89,12 @@ func (s Server) snapshot(ctx context.Context, reference *externalscaler.ScaledOb
 	if maxAge <= 0 {
 		maxAge = 2 * time.Minute
 	}
-	return snapshot, snapshotFresh(snapshot.GeneratedAt, time.Now(), maxAge)
+	sourceMaxAge := s.SourceMaxAge
+	if sourceMaxAge <= 0 {
+		sourceMaxAge = maxAge
+	}
+	now := time.Now()
+	return snapshot, snapshotFresh(snapshot.GeneratedAt, now, maxAge) && snapshotFresh(snapshot.ObservedAt, now, sourceMaxAge)
 }
 
 // snapshotFresh rejects both stale and future-dated snapshots. Accepting a

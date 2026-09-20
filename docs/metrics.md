@@ -33,6 +33,7 @@ high-cardinality metrics and accidental query disclosure.
 | `replicasense_surge_projection_demand` | forecaster | Source-metric unit | Deterministic short-term surge projection. `0` means surge protection is inactive. It is kept separate from the ML forecast. |
 | `replicasense_predictive_metric` | forecaster | Replicas | Safety-approved desired replica recommendation returned through the KEDA external scaler. It has an HPA target of one, so do not compare it directly with source-demand values. |
 | `replicasense_snapshot_age_seconds` | forecaster | Seconds | Age of the latest forecast snapshot. A growing value means no fresh forecast is being produced. |
+| `replicasense_forecast_source_age_seconds` | forecaster | Seconds | Age of the source observation used by the latest forecast. This detects a frozen input even when a process is still producing snapshots. The scaler withholds a snapshot if either this source age or snapshot age exceeds its freshness limit. |
 | `replicasense_model_info` | forecaster | Info gauge | `1` for the active model engine for a workload. Use the `engine` label to identify it. |
 | `replicasense_sampler_cycles_total` | sampler | Counter | Sampling loops by `success` or `error`. A rising error counter means at least one active workload or the persistence step failed in that cycle. |
 | `replicasense_sampler_last_success_unixtime` | sampler | Unix seconds | Time of the latest fully successful sampler cycle. Unlike process uptime, it proves useful work completed. |
@@ -68,6 +69,8 @@ replicasense_surge_projection_demand{namespace="shop", scaled_object="checkout"}
 # Forecasts older than three minutes. Tune the threshold to your
 # sampling/forecast interval and operational policy.
 replicasense_snapshot_age_seconds > 180
+or
+replicasense_forecast_source_age_seconds > 180
 ```
 
 ```promql

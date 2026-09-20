@@ -23,6 +23,7 @@ type Service struct {
 	JitterWindow   time.Duration
 	Backfiller     *Backfiller
 	bootstrapped   sync.Map
+	failed         sync.Map
 	Sleep          func(context.Context, time.Duration) error
 	Observer       interface {
 		RecordSample(workloadstore.SamplingWorkload, float64)
@@ -70,6 +71,22 @@ func (s *Service) RunOnce(ctx context.Context, observedAt time.Time) error {
 				return
 			}
 			value, err := s.queryWithRetry(ctx, workload, observedAt)
+			if err != nil {
+				s.failed.Store(workload.ID+":"+workload.Spec.SourceFingerprint, struct{}{})
+			}
+			recovered := false
+			if err == nil {
+				_, recovered = s.failed.LoadAndDelete(workload.ID + ":" + workload.Spec.SourceFingerprint)
+				if recovered && s.Backfiller != nil {
+					// Best effort: an unavailable historical range must not discard
+					// the newly recovered live sample.
+					if _, recoveryErr := s.Backfiller.RecoverRecentHistory(ctx, workload, observedAt); recoveryErr != nil {
+						mutex.Lock()
+						failures = append(failures, fmt.Errorf("recover workload %s history: %w", workload.ID, recoveryErr))
+						mutex.Unlock()
+					}
+				}
+			}
 			mutex.Lock()
 			defer mutex.Unlock()
 			if err != nil {

@@ -45,7 +45,7 @@ func main() {
 	observability.StartMetricsServer(ctx, configuration.MetricsListenAddress, metricsRegistry, func(err error) {
 		fmt.Fprintln(os.Stderr, "serve metrics:", err)
 	})
-	service := sampler.Service{Store: repository, Querier: prometheusClient, ClusterID: configuration.ClusterID, MaxConcurrent: configuration.MaxConcurrent, QueryTimeout: configuration.QueryTimeout, MaxRetries: configuration.MaxRetries, InitialBackoff: configuration.InitialBackoff, JitterWindow: configuration.JitterWindow, Backfiller: &sampler.Backfiller{Store: repository, Querier: prometheusClient, QueryTimeout: configuration.QueryTimeout}, Observer: metrics}
+	service := sampler.Service{Store: repository, Querier: prometheusClient, ClusterID: configuration.ClusterID, MaxConcurrent: configuration.MaxConcurrent, QueryTimeout: configuration.QueryTimeout, MaxRetries: configuration.MaxRetries, InitialBackoff: configuration.InitialBackoff, JitterWindow: configuration.JitterWindow, Backfiller: &sampler.Backfiller{Store: repository, Querier: prometheusClient, QueryTimeout: configuration.QueryTimeout, RecoveryWindow: configuration.RecoveryWindow}, Observer: metrics}
 	for {
 		now := time.Now().UTC()
 		if err := service.RunOnce(ctx, now); err != nil {
