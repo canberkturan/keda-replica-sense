@@ -1,2 +1,4 @@
 .build/
 benchmark-lab/
+__pycache__/
+*.py[cod]

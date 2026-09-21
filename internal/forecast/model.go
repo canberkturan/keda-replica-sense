@@ -67,6 +67,8 @@ func ResolveModel(engine string) (Model, error) {
 		return HoltWinters{}, nil
 	case "xgboost":
 		return nil, fmt.Errorf("xgboost requires a trained native artifact")
+	case "gru":
+		return nil, fmt.Errorf("gru requires a trained artifact")
 	default:
 		return nil, fmt.Errorf("unsupported model engine %q", engine)
 	}
@@ -85,6 +87,9 @@ func LoadModel(stored StoredModel) (Model, error) {
 	}
 	if stored.Engine == "xgboost" {
 		return loadXGBoostArtifact(stored.ID, stored.Artifact)
+	}
+	if stored.Engine == "gru" {
+		return loadGRUArtifact(stored.ID, stored.Artifact)
 	}
 	return ResolveModel(stored.Engine)
 }

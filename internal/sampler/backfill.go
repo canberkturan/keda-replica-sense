@@ -29,18 +29,46 @@ type Backfiller struct {
 	Store        workloadstore.HistoryRepository
 	Querier      RangeQuerier
 	QueryTimeout time.Duration
+	// RecoveryWindow bounds outage repair work. A successful source query can
+	// restore recent missing observations, but a prolonged outage must not turn
+	// one recovery into an unbounded historical read.
+	RecoveryWindow time.Duration
 }
 
-// EnsureHistory range-queries the entire rolling training window when local
-// history is insufficient. UPSERT makes re-fetching a partial window safe.
-func (b Backfiller) EnsureHistory(ctx context.Context, workload workloadstore.SamplingWorkload, now time.Time) (bool, error) {
-	end := now.UTC().Truncate(workload.Spec.Forecast.SamplingInterval)
-	start := end.Add(-workload.Spec.Forecast.TrainingWindow)
+// RecoverRecentHistory fills the recent interval since the last persisted
+// sample after an instant query recovers. Range-query results are authoritative
+// source observations, and UPSERT makes retries harmless. If the source cannot
+// provide the missing range, the caller still persists the new live sample so
+// inference can later use its continuous post-outage suffix.
+func (b Backfiller) RecoverRecentHistory(ctx context.Context, workload workloadstore.SamplingWorkload, now time.Time) (bool, error) {
+	if b.Store == nil || b.Querier == nil {
+		return false, nil
+	}
+	interval := workload.Spec.Forecast.SamplingInterval
+	if interval <= 0 {
+		return false, nil
+	}
+	end := now.UTC().Truncate(interval)
+	window := b.RecoveryWindow
+	if window <= 0 {
+		window = 24 * time.Hour
+	}
+	start := end.Add(-window)
 	coverage, err := b.Store.GetSampleCoverage(ctx, workload, start, end)
 	if err != nil {
 		return false, err
 	}
-	if hasSufficientHistory(coverage, start, end, workload.Spec.Forecast.SamplingInterval) {
+	if !coverage.NewestObservedAt.IsZero() && coverage.NewestObservedAt.After(start) {
+		start = coverage.NewestObservedAt.Add(interval)
+	}
+	if !start.Before(end) {
+		return false, nil
+	}
+	return b.queryAndStore(ctx, workload, start, end)
+}
+
+func (b Backfiller) queryAndStore(ctx context.Context, workload workloadstore.SamplingWorkload, start, end time.Time) (bool, error) {
+	if !start.Before(end) {
 		return false, nil
 	}
 	samples := make([]domain.Sample, 0)
@@ -71,7 +99,25 @@ func (b Backfiller) EnsureHistory(ctx context.Context, workload workloadstore.Sa
 		}
 		chunkStart = chunkEnd
 	}
+	if len(samples) == 0 {
+		return false, nil
+	}
 	return true, b.Store.UpsertSamples(ctx, samples)
+}
+
+// EnsureHistory range-queries the entire rolling training window when local
+// history is insufficient. UPSERT makes re-fetching a partial window safe.
+func (b Backfiller) EnsureHistory(ctx context.Context, workload workloadstore.SamplingWorkload, now time.Time) (bool, error) {
+	end := now.UTC().Truncate(workload.Spec.Forecast.SamplingInterval)
+	start := end.Add(-workload.Spec.Forecast.TrainingWindow)
+	coverage, err := b.Store.GetSampleCoverage(ctx, workload, start, end)
+	if err != nil {
+		return false, err
+	}
+	if hasSufficientHistory(coverage, start, end, workload.Spec.Forecast.SamplingInterval) {
+		return false, nil
+	}
+	return b.queryAndStore(ctx, workload, start, end)
 }
 
 func hasSufficientHistory(coverage workloadstore.SampleCoverage, start, end time.Time, interval time.Duration) bool {

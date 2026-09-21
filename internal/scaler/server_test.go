@@ -27,17 +27,31 @@ func TestServerFailsClosed(t *testing.T) {
 }
 
 func TestServerServesOnlyFreshSnapshots(t *testing.T) {
-	fresh := &domain.ForecastSnapshot{GeneratedAt: time.Now(), SafeDemand: 7}
+	fresh := &domain.ForecastSnapshot{GeneratedAt: time.Now(), ObservedAt: time.Now(), SafeDemand: 7}
 	server := Server{ClusterID: "cluster-a", SnapshotReader: fakeSnapshots{snapshot: fresh}, SnapshotMaxAge: time.Minute}
 	request := &externalscaler.GetMetricsRequest{ScaledObjectRef: &externalscaler.ScaledObjectRef{Name: "api", Namespace: "default", ScalerMetadata: map[string]string{"sourceTrigger": "reactive"}}, MetricName: MetricName}
 	metrics, err := server.GetMetrics(context.Background(), request)
 	if err != nil || metrics.GetMetricValues()[0].GetMetricValueFloat() != 7 {
 		t.Fatalf("GetMetrics() = %#v, %v", metrics, err)
 	}
-	server.SnapshotReader = fakeSnapshots{snapshot: &domain.ForecastSnapshot{GeneratedAt: time.Now().Add(-2 * time.Minute), SafeDemand: 7}}
+	server.SnapshotReader = fakeSnapshots{snapshot: &domain.ForecastSnapshot{GeneratedAt: time.Now().Add(-2 * time.Minute), ObservedAt: time.Now(), SafeDemand: 7}}
 	metrics, _ = server.GetMetrics(context.Background(), request)
 	if metrics.GetMetricValues()[0].GetMetricValueFloat() != 0 {
 		t.Fatalf("stale value = %v", metrics.GetMetricValues()[0].GetMetricValueFloat())
+	}
+	server.SnapshotReader = fakeSnapshots{snapshot: &domain.ForecastSnapshot{GeneratedAt: time.Now().Add(time.Minute), ObservedAt: time.Now(), SafeDemand: 7}}
+	metrics, _ = server.GetMetrics(context.Background(), request)
+	if metrics.GetMetricValues()[0].GetMetricValueFloat() != 0 {
+		t.Fatalf("future-dated value = %v", metrics.GetMetricValues()[0].GetMetricValueFloat())
+	}
+}
+
+func TestServerRejectsFreshlyGeneratedSnapshotFromStaleSource(t *testing.T) {
+	server := Server{ClusterID: "cluster-a", SnapshotReader: fakeSnapshots{snapshot: &domain.ForecastSnapshot{GeneratedAt: time.Now(), ObservedAt: time.Now().Add(-3 * time.Minute), SafeDemand: 7}}, SnapshotMaxAge: time.Minute}
+	request := &externalscaler.GetMetricsRequest{ScaledObjectRef: &externalscaler.ScaledObjectRef{Name: "api", Namespace: "default", ScalerMetadata: map[string]string{"sourceTrigger": "reactive"}}, MetricName: MetricName}
+	metrics, err := server.GetMetrics(context.Background(), request)
+	if err != nil || metrics.GetMetricValues()[0].GetMetricValueFloat() != 0 {
+		t.Fatalf("GetMetrics() = %#v, %v; want stale source rejected", metrics, err)
 	}
 }
 

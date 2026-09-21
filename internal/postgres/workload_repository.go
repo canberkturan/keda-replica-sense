@@ -69,6 +69,12 @@ func (r *WorkloadRepository) DeactivateParent(ctx context.Context, parent worklo
 }
 
 func upsertWorkload(ctx context.Context, tx pgx.Tx, reconciliation workloadstore.Reconciliation, workload domain.WorkloadSpec) error {
+	var workloadID, previousPolicy string
+	err := tx.QueryRow(ctx, `SELECT id, policy_revision FROM workloads WHERE cluster_id=$1 AND namespace=$2 AND scaled_object_name=$3 AND predictive_trigger_name=$4 FOR UPDATE`, workload.Key.ClusterID, workload.Key.Namespace, workload.Key.ScaledObjectName, workload.Key.PredictiveTriggerName).Scan(&workloadID, &previousPolicy)
+	if err != nil && err != pgx.ErrNoRows {
+		return fmt.Errorf("load existing workload for reconciliation: %w", err)
+	}
+	existed := err == nil
 	if _, err := tx.Exec(ctx, upsertWorkloadSQL,
 		workload.Key.ClusterID,
 		workload.Key.Namespace,
@@ -92,9 +98,26 @@ func upsertWorkload(ctx context.Context, tx pgx.Tx, reconciliation workloadstore
 		int64(workload.Forecast.SamplingInterval/time.Second),
 		workload.Forecast.ModelEngine,
 		workload.Forecast.BusinessTimezone,
+		workload.Forecast.ImmediateTraining,
+		workload.Forecast.ClearOldModels,
 		workload.PolicyRevision,
 	); err != nil {
 		return fmt.Errorf("upsert workload %s/%s/%s/%s: %w", workload.Key.ClusterID, workload.Key.Namespace, workload.Key.ScaledObjectName, workload.Key.PredictiveTriggerName, err)
+	}
+	if workload.Forecast.ClearOldModels && (!existed || previousPolicy != workload.PolicyRevision) {
+		if !existed {
+			if err := tx.QueryRow(ctx, `SELECT id FROM workloads WHERE cluster_id=$1 AND namespace=$2 AND scaled_object_name=$3 AND predictive_trigger_name=$4`, workload.Key.ClusterID, workload.Key.Namespace, workload.Key.ScaledObjectName, workload.Key.PredictiveTriggerName).Scan(&workloadID); err != nil {
+				return fmt.Errorf("load reconciled workload: %w", err)
+			}
+		}
+		// Keep training-run audit rows while removing all model artifacts for the
+		// stable workload ID, including previous source fingerprints.
+		if _, err := tx.Exec(ctx, `UPDATE training_runs SET model_id=NULL WHERE workload_id=$1`, workloadID); err != nil {
+			return fmt.Errorf("detach cleared models from training runs: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM models WHERE workload_id=$1`, workloadID); err != nil {
+			return fmt.Errorf("clear workload models: %w", err)
+		}
 	}
 	return nil
 }
@@ -106,11 +129,11 @@ INSERT INTO workloads (
     min_replica_count, max_replica_count, source_trigger_name,
     prometheus_server_address, prometheus_query, reactive_threshold,
     source_fingerprint, forecast_horizon_seconds, startup_latency_seconds, safety_buffer_seconds, forecast_quantile,
-    training_window_seconds, sampling_interval_seconds, model_engine, business_timezone,
+    training_window_seconds, sampling_interval_seconds, model_engine, business_timezone, immediate_training, clear_old_models,
     policy_revision, status, validation_errors, deactivated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    $16, $17, $18, $19, $20, $21, $22, $23, 'active', '[]'::jsonb, NULL
+    $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, 'active', '[]'::jsonb, NULL
 )
 ON CONFLICT (cluster_id, namespace, scaled_object_name, predictive_trigger_name)
 DO UPDATE SET
@@ -132,6 +155,8 @@ DO UPDATE SET
     sampling_interval_seconds = EXCLUDED.sampling_interval_seconds,
     model_engine = EXCLUDED.model_engine,
     business_timezone = EXCLUDED.business_timezone,
+    immediate_training = EXCLUDED.immediate_training,
+    clear_old_models = EXCLUDED.clear_old_models,
     policy_revision = EXCLUDED.policy_revision,
     status = 'active',
     validation_errors = '[]'::jsonb,

@@ -11,10 +11,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"github.com/canberkturan/keda-replica-sense/internal/config"
 	"github.com/canberkturan/keda-replica-sense/internal/controller"
+	"github.com/canberkturan/keda-replica-sense/internal/observability"
 	"github.com/canberkturan/keda-replica-sense/internal/postgres"
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
 )
@@ -67,11 +69,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	triggerMetrics := observability.NewScaledObjectTriggerMetrics(ctrlmetrics.Registry)
 	reconciler := controller.ScaledObjectReconciler{
 		Client: manager.GetClient(),
 		Processor: controller.Processor{
 			ParserOptions: configuration.Parser,
 			Sink:          controller.RepositorySink{Repository: postgres.NewWorkloadRepository(pool)},
+			TriggerConfig: triggerMetrics,
 		},
 	}
 	if err := reconciler.SetupWithManager(manager); err != nil {

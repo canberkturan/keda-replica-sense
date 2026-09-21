@@ -46,7 +46,9 @@ database URL Secret and intentionally does not install KEDA or PostgreSQL.
 The complete database bootstrap, Helm installation, workload setup, and
 operations flow is in the [installation guide](docs/enterprise-installation.md).
 See the [metrics reference](docs/metrics.md) for Prometheus metric meanings,
-labels, dashboard queries, and alerting guidance.
+labels, dashboard queries, and alerting guidance. The [architecture guide](docs/architecture.md)
+explains topology, training, model selection, scaling semantics, and failure
+behavior.
 
 `Dockerfile.xgboost` is the reproducible image foundation for the default
 forecaster and Trainer Job images. The native engine is enabled only in images
@@ -56,10 +58,23 @@ for explicitly configured baseline and rolling-quantile engines.
 The CI workflow verifies both the portable build and `go test -tags xgboost
 ./...` inside this reproducible native XGBoost build environment.
 
+For `modelEngine: gru`, ReplicaSense can route only the short-lived Trainer
+Job to the CPU-only PyTorch image. The artifact contains numeric tensors, not
+pickle or TorchScript; the Go forecaster validates and evaluates it locally.
+Set `trainer.images.gru` to the published `replicasense-trainer:<version>-pytorch-gru`
+tag. GRU candidates must still pass the same temporal validation and promotion
+gate as every other model.
+
+See [the PyTorch GRU guide](docs/pytorch-gru.md) for the CPU image, resource
+budget, temporal validation, and promotion behaviour.
+
 ## Safety boundary
 
 Native KEDA Prometheus triggers remain the reactive safety path. Predictive
-snapshots fail closed when stale or unsafe. ReplicaSense deploys two scaler
+snapshots fail closed when their generation time or underlying source sample is
+stale or unsafe. After a source query recovers, ReplicaSense repairs a bounded
+recent gap only from Prometheus range-query data; otherwise it resumes from a
+continuous post-outage segment without inventing observations. ReplicaSense deploys two scaler
 replicas, a PDB, and preferred cross-node anti-affinity; a single scaler-pod
 loss continues serving metrics. **Accepted catastrophic-outage limitation:**
 if every external-scaler Service endpoint is lost, KEDA fails while discovering

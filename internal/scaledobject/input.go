@@ -3,7 +3,11 @@
 // boundary in a later milestone.
 package scaledobject
 
-import "github.com/canberkturan/keda-replica-sense/internal/domain"
+import (
+	"time"
+
+	"github.com/canberkturan/keda-replica-sense/internal/domain"
+)
 
 // ScaledObjectInput is a dependency-free view of a native KEDA ScaledObject.
 type ScaledObjectInput struct {
@@ -28,6 +32,10 @@ type ParserOptions struct {
 	ScalerAddresses        map[string]struct{}
 	DefaultMinReplicaCount int32
 	DefaultMaxReplicaCount int32
+	// MinimumTrainingWindow protects production installations from creating
+	// models from an insufficient history. A zero value keeps the safe 7-day
+	// default; operators may lower it only for deliberately accelerated labs.
+	MinimumTrainingWindow time.Duration
 }
 
 type Violation struct {

@@ -17,15 +17,51 @@ func NewTrainingRepository(pool *pgxpool.Pool) *TrainingRepository {
 
 func (r *TrainingRepository) Claim(ctx context.Context, claim training.Claim) (*training.Run, bool, error) {
 	var run training.Run
-	err := r.database.QueryRow(ctx, `INSERT INTO training_runs (cluster_id,workload_id,training_slot,status,engine,training_window_start,training_window_end)
+	query := `INSERT INTO training_runs (cluster_id,workload_id,training_slot,status,engine,training_window_start,training_window_end)
 		VALUES ($1,$2,$3,'claimed',$4,$5,$6)
 		ON CONFLICT (cluster_id,workload_id,training_slot) DO NOTHING
-		RETURNING id`, claim.ClusterID, claim.WorkloadID, claim.Slot, claim.Engine, claim.TrainingWindowFrom, claim.TrainingWindowTo).Scan(&run.ID)
+		RETURNING id`
+	args := []any{claim.ClusterID, claim.WorkloadID, claim.Slot, claim.Engine, claim.TrainingWindowFrom, claim.TrainingWindowTo}
+	if !claim.ExclusiveSince.IsZero() {
+		query = `INSERT INTO training_runs (cluster_id,workload_id,training_slot,status,engine,training_window_start,training_window_end)
+			SELECT $1,$2,$3,'claimed',$4,$5,$6
+			WHERE NOT EXISTS (SELECT 1 FROM training_runs WHERE cluster_id=$1 AND workload_id=$2 AND created_at >= $7)
+			ON CONFLICT (cluster_id,workload_id,training_slot) DO NOTHING
+			RETURNING id`
+		args = append(args, claim.ExclusiveSince)
+	}
+	err := r.database.QueryRow(ctx, query, args...).Scan(&run.ID)
 	if err == pgx.ErrNoRows {
 		return nil, false, nil
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("claim training run: %w", err)
+	}
+	return &run, true, nil
+}
+
+// ClaimImmediate reserves a deterministic policy-revision slot. If a
+// controller/scheduler process died after reserving the run but before it
+// created the Kubernetes Job, a still-claimed run is returned so the
+// idempotent Job creator can repair that gap on the next loop.
+func (r *TrainingRepository) ClaimImmediate(ctx context.Context, claim training.Claim) (*training.Run, bool, error) {
+	var run training.Run
+	err := r.database.QueryRow(ctx, `INSERT INTO training_runs (cluster_id,workload_id,training_slot,status,engine,training_window_start,training_window_end)
+		VALUES ($1,$2,$3,'claimed',$4,$5,$6)
+		ON CONFLICT (cluster_id,workload_id,training_slot) DO NOTHING
+		RETURNING id`, claim.ClusterID, claim.WorkloadID, claim.Slot, claim.Engine, claim.TrainingWindowFrom, claim.TrainingWindowTo).Scan(&run.ID)
+	if err == nil {
+		return &run, true, nil
+	}
+	if err != pgx.ErrNoRows {
+		return nil, false, fmt.Errorf("claim immediate training run: %w", err)
+	}
+	err = r.database.QueryRow(ctx, `SELECT id FROM training_runs WHERE cluster_id=$1 AND workload_id=$2 AND training_slot=$3 AND status='claimed'`, claim.ClusterID, claim.WorkloadID, claim.Slot).Scan(&run.ID)
+	if err == pgx.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("load pending immediate training run: %w", err)
 	}
 	return &run, true, nil
 }

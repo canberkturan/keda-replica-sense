@@ -1,16 +1,22 @@
 # ReplicaSense metrics reference
 
-ReplicaSense exposes Prometheus metrics from the sampler and forecaster on
-`/metrics` port `8080`. The Helm chart creates Services and `ServiceMonitor`
-resources for both components by default. If Prometheus Operator is not used,
-scrape those Services with your existing Prometheus configuration.
+ReplicaSense exposes Prometheus metrics on `/metrics`, port `8080`. The Helm
+chart creates Services and `ServiceMonitor` resources for the controller,
+sampler, forecaster, and external scaler by default. If Prometheus Operator is
+not used, scrape those Services with your existing Prometheus configuration.
+
+The controller also exposes the standard controller-runtime metrics, while all
+long-running Go services expose the standard `go_*` and `process_*` runtime
+metrics. The ReplicaSense metrics below answer the operational questions that
+matter during autoscaling: did we sample, did we forecast, did KEDA receive a
+fresh value, and did cluster capacity allow speculation?
 
 All workload metrics use the same stable identity labels:
 
 | Label | Meaning |
 | --- | --- |
 | `cluster_id` | The Helm `clusterID` value. |
-| `namespace` | Namespace of the KEDA `ScaledObject`. |
+| `exported_namespace` | Namespace of the KEDA `ScaledObject`. Prometheus reserves `namespace` for the ServiceMonitor's scrape namespace, so it automatically renames ReplicaSense's application label to `exported_namespace` during ingestion. |
 | `scaled_object` | Name of the KEDA `ScaledObject`. |
 | `predictive_trigger` | Name of the ReplicaSense external trigger. |
 
@@ -27,11 +33,35 @@ high-cardinality metrics and accidental query disclosure.
 | `replicasense_surge_projection_demand` | forecaster | Source-metric unit | Deterministic short-term surge projection. `0` means surge protection is inactive. It is kept separate from the ML forecast. |
 | `replicasense_predictive_metric` | forecaster | Replicas | Safety-approved desired replica recommendation returned through the KEDA external scaler. It has an HPA target of one, so do not compare it directly with source-demand values. |
 | `replicasense_snapshot_age_seconds` | forecaster | Seconds | Age of the latest forecast snapshot. A growing value means no fresh forecast is being produced. |
+| `replicasense_forecast_source_age_seconds` | forecaster | Seconds | Age of the source observation used by the latest forecast. This detects a frozen input even when a process is still producing snapshots. The scaler withholds a snapshot if either this source age or snapshot age exceeds its freshness limit. |
 | `replicasense_model_info` | forecaster | Info gauge | `1` for the active model engine for a workload. Use the `engine` label to identify it. |
+| `replicasense_scaledobject_trigger_info` | controller | Info gauge | `1` for each trigger on a ReplicaSense-managed ScaledObject. Predictive rows expose the engine, quantile, forecast/training windows, sampling interval, latency/buffer, timezone, and immediate-training settings. The referenced Prometheus row exposes its threshold, linkage, and source fingerprint. |
+| `replicasense_sampler_cycles_total` | sampler | Counter | Sampling loops by `success` or `error`. A rising error counter means at least one active workload or the persistence step failed in that cycle. |
+| `replicasense_sampler_last_success_unixtime` | sampler | Unix seconds | Time of the latest fully successful sampler cycle. Unlike process uptime, it proves useful work completed. |
+| `replicasense_forecaster_cycles_total` | forecaster | Counter | Forecast/evaluation loops by `success` or `error`. |
+| `replicasense_forecaster_last_success_unixtime` | forecaster | Unix seconds | Time of the latest fully successful forecast and evaluation cycle. |
+| `replicasense_cluster_resource_capacity` | forecaster | CPU cores or bytes | Cluster capacity accounting used by the speculative guard. Labels: `resource` (`cpu` or `memory`) and `state` (`allocatable`, `requested`, `available`, `speculative_budget`). |
+| `replicasense_scaler_requests_total` | external scaler | Counter | KEDA gRPC requests by `method` and whether a fresh snapshot was `served` or `withheld`. A withheld value is fail-closed, not necessarily an incident. |
+| `replicasense_scaler_served_snapshot_age_seconds` | external scaler | Seconds | Age of the snapshot on the most recent served scaler request. It becomes `0` when the latest request was withheld. |
 
 The persisted compatibility name `ForecastP95` represents the configured upper
 operational quantile. It is not necessarily literal P95 when a workload sets a
 different valid `quantile` value.
+
+## ScaledObject configuration metric
+
+`replicasense_scaledobject_trigger_info` has one active series for every
+trigger in a ReplicaSense-managed ScaledObject. `trigger_role` distinguishes
+`predictive`, its `reactive_source`, and any other KEDA trigger. Select a
+predictive row to inspect `model_engine`, `quantile`, `forecast_horizon`,
+`training_window`, `sampling_interval`, `startup_latency`, `safety_buffer`,
+`business_timezone`, `immediate_training`, and `clear_old_models`.
+
+The reactive-source row carries `reactive_threshold`,
+`linked_predictive_trigger`, and `source_fingerprint`. Raw PromQL and
+Prometheus addresses are deliberately not metric labels: they can contain
+sensitive label values and would cause unbounded label cardinality. A changed
+query produces a changed `source_fingerprint` instead.
 
 ## Useful PromQL
 
@@ -39,27 +69,52 @@ Replace the example label filters with the workload being investigated.
 
 ```promql
 # Observed demand against the selected upper forecast.
-replicasense_observed_demand{namespace="shop", scaled_object="checkout"}
+replicasense_observed_demand{exported_namespace="shop", scaled_object="checkout"}
 or
-replicasense_forecast_demand{namespace="shop", scaled_object="checkout", quantile="0.95"}
+replicasense_forecast_demand{exported_namespace="shop", scaled_object="checkout", quantile="0.95"}
 ```
 
 ```promql
 # The predictive replica recommendation and an active surge projection.
-replicasense_predictive_metric{namespace="shop", scaled_object="checkout"}
+replicasense_predictive_metric{exported_namespace="shop", scaled_object="checkout"}
 or
-replicasense_surge_projection_demand{namespace="shop", scaled_object="checkout"} > 0
+replicasense_surge_projection_demand{exported_namespace="shop", scaled_object="checkout"} > 0
 ```
 
 ```promql
 # Forecasts older than three minutes. Tune the threshold to your
 # sampling/forecast interval and operational policy.
 replicasense_snapshot_age_seconds > 180
+or
+replicasense_forecast_source_age_seconds > 180
 ```
 
 ```promql
 # Active model engine per workload.
 replicasense_model_info == 1
+```
+
+```promql
+# Did sampling and forecasting complete recently? The alert threshold should
+# be larger than the configured interval to allow a little scheduling delay.
+time() - replicasense_sampler_last_success_unixtime > 180
+or
+time() - replicasense_forecaster_last_success_unixtime > 180
+```
+
+```promql
+# Rate of scaler requests that had no fresh predictive answer during the last
+# five minutes. Inspect snapshot age, model status, and forecaster errors
+# before treating this as an application incident.
+sum(rate(replicasense_scaler_requests_total{outcome="withheld"}[5m]))
+```
+
+```promql
+# Available CPU and the portion ReplicaSense is willing to spend on predictive
+# scale-up. Memory uses the same query with resource="memory".
+replicasense_cluster_resource_capacity{resource="cpu",state="available"}
+or
+replicasense_cluster_resource_capacity{resource="cpu",state="speculative_budget"}
 ```
 
 ## Dashboard and alerting guidance
@@ -69,11 +124,20 @@ projection, and predictive replicas in separate panels or axes: source demand
 and replicas are different units. Pair the predictive-replica panel with the
 KEDA HPA's current replica count and the native trigger's current metric.
 
-Alert on snapshot age based on the workload's update interval and on an absent
-sampler/forecaster scrape according to your Prometheus policy. A nonzero surge
-projection is an event worth annotating, not automatically an incident. During
-an investigation, compare it with observed demand and the current replica
-count before changing safety limits.
+Alert on an absent scrape as usual, then separately alert when the sampler or
+forecaster last-success timestamp is old. The latter catches a live process
+that has stopped doing useful work. Alert on a sustained scaler `withheld` rate
+only after choosing a threshold that matches your normal model warm-up and
+staleness policy.
+
+A nonzero surge projection is an event worth annotating, not automatically an
+incident. The default policy needs two consecutive samples that are both at
+least 3x the historical P95 slope and 1.5x the preceding five-sample baseline.
+The projection is capped at 1.5x the current observed demand. Tune the
+`REPLICASENSE_SURGE_*` environment values through Helm only after reviewing
+observed demand, the upper forecast, and current replicas. If the cluster
+budget is regularly below the desired speculative capacity, add real cluster
+headroom or lower workload limits; do not simply disable the guardrail.
 
 Metrics describe the current operational path. Historical forecast accuracy,
 validation, promotion decisions, and safety reasons are stored in PostgreSQL

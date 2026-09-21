@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadController(t *testing.T) {
 	environment := map[string]string{
@@ -16,11 +19,29 @@ func TestLoadController(t *testing.T) {
 	if config.Parser.ClusterID != "prod-openshift-01" || len(config.Parser.ScalerAddresses) != 2 {
 		t.Fatalf("unexpected parser config: %#v", config.Parser)
 	}
+	if config.Parser.MinimumTrainingWindow != 7*24*time.Hour {
+		t.Fatalf("MinimumTrainingWindow = %s, want 7d", config.Parser.MinimumTrainingWindow)
+	}
 	if config.LeaderElection {
 		t.Fatal("LeaderElection = true, want false")
 	}
 	if config.MetricsBindAddress != ":8080" || config.HealthProbeBindAddress != ":8081" {
 		t.Fatalf("unexpected default addresses: %#v", config)
+	}
+}
+
+func TestLoadControllerAllowsExplicitMinimumTrainingWindow(t *testing.T) {
+	config, err := LoadController(environmentLookup(map[string]string{
+		"REPLICASENSE_CLUSTER_ID":          "lab",
+		"REPLICASENSE_SCALER_ADDRESSES":    "replicasense.default.svc:6000",
+		"REPLICASENSE_DATABASE_URL":        "postgres://example",
+		"REPLICASENSE_MIN_TRAINING_WINDOW": "12h",
+	}))
+	if err != nil {
+		t.Fatalf("LoadController() error = %v", err)
+	}
+	if config.Parser.MinimumTrainingWindow != 12*time.Hour {
+		t.Fatalf("MinimumTrainingWindow = %s, want 12h", config.Parser.MinimumTrainingWindow)
 	}
 }
 

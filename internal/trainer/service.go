@@ -36,10 +36,18 @@ type Models interface {
 }
 
 type Service struct {
-	Workloads Workloads
-	Samples   Samples
-	Runs      Runs
-	Models    Models
+	Workloads              Workloads
+	Samples                Samples
+	Runs                   Runs
+	Models                 Models
+	ExpectedPolicyRevision string
+	// SeasonalPeriod is normally 24h. It is injected by the scheduler into
+	// each Job so an explicitly accelerated laboratory can preserve its
+	// simulated calendar without weakening the production default.
+	SeasonalPeriod time.Duration
+	// MaxGapIntervals bounds tolerated source gaps. The production default is
+	// conservative; accelerated labs may opt into a larger value.
+	MaxGapIntervals int
 }
 
 func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine string, now time.Time) (err error) {
@@ -68,6 +76,9 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if workload == nil {
 		return fmt.Errorf("active workload %s not found", workloadID)
 	}
+	if s.ExpectedPolicyRevision != "" && workload.Spec.PolicyRevision != s.ExpectedPolicyRevision {
+		return fmt.Errorf("training Job policy revision no longer matches workload %s", workloadID)
+	}
 	if engine == "" {
 		engine = workload.Spec.Forecast.ModelEngine
 	}
@@ -77,15 +88,26 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if err != nil {
 		return err
 	}
-	minimum := int((24 * time.Hour) / workload.Spec.Forecast.SamplingInterval)
-	if err := dataset.Validate(samples, dataset.QualityPolicy{MinSamples: minimum, SamplingInterval: workload.Spec.Forecast.SamplingInterval, MaxGapIntervals: 2}); err != nil {
+	seasonalPeriod := s.SeasonalPeriod
+	if seasonalPeriod <= 0 {
+		seasonalPeriod = 24 * time.Hour
+	}
+	if seasonalPeriod%workload.Spec.Forecast.SamplingInterval != 0 {
+		return fmt.Errorf("seasonal period %s must be an exact multiple of sampling interval %s", seasonalPeriod, workload.Spec.Forecast.SamplingInterval)
+	}
+	minimum := int(seasonalPeriod / workload.Spec.Forecast.SamplingInterval)
+	maxGapIntervals := s.MaxGapIntervals
+	if maxGapIntervals <= 0 {
+		maxGapIntervals = 2
+	}
+	if err := dataset.Validate(samples, dataset.QualityPolicy{MinSamples: minimum, SamplingInterval: workload.Spec.Forecast.SamplingInterval, MaxGapIntervals: maxGapIntervals}); err != nil {
 		return err
 	}
 	location, err := time.LoadLocation(workload.Spec.Forecast.BusinessTimezone)
 	if err != nil {
 		return fmt.Errorf("load workload business timezone: %w", err)
 	}
-	request := forecast.Request{Horizon: workload.Spec.Forecast.DecisionHorizon(), SamplingInterval: workload.Spec.Forecast.SamplingInterval, SeasonalPeriod: 24 * time.Hour, Quantile: workload.Spec.Forecast.Quantile, BusinessLocation: location}
+	request := forecast.Request{Horizon: workload.Spec.Forecast.DecisionHorizon(), SamplingInterval: workload.Spec.Forecast.SamplingInterval, SeasonalPeriod: seasonalPeriod, Quantile: workload.Spec.Forecast.Quantile, BusinessLocation: location}
 	var model forecast.Model
 	var validation forecast.ValidationMetrics
 	var artifact []byte
@@ -93,6 +115,11 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 		model, artifact, err = forecast.TrainXGBoost(samples, request)
 		if err == nil {
 			validation, err = forecast.ValidateXGBoost(samples, request, 48)
+		}
+	} else if engine == "gru" {
+		model, artifact, err = forecast.TrainGRU(samples, request)
+		if err == nil {
+			validation, err = forecast.ValidateGRU(samples, request, 12)
 		}
 	} else {
 		model, err = forecast.ResolveModel(engine)
@@ -124,7 +151,7 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	} else {
 		decision = training.EvaluatePromotion(training.DefaultPromotionPolicy(), validation, champion, baselineValidation)
 	}
-	metrics, err := json.Marshal(map[string]any{"sample_count": len(samples), "baseline": model.Engine() != "xgboost", "operational_quantile": forecastOperationalQuantile(request), "walk_forward": validation, "deterministic_baseline": baselineValidation, "promotion": decision})
+	metrics, err := json.Marshal(map[string]any{"sample_count": len(samples), "baseline": model.Engine() != "xgboost" && model.Engine() != "gru", "operational_quantile": forecastOperationalQuantile(request), "walk_forward": validation, "deterministic_baseline": baselineValidation, "promotion": decision})
 	if err != nil {
 		return err
 	}
@@ -146,6 +173,9 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 func featureSchemaFor(engine string) string {
 	if engine == "xgboost" {
 		return features.SchemaV3
+	}
+	if engine == "gru" {
+		return forecast.GRUFeatureSchema
 	}
 	return "v1"
 }

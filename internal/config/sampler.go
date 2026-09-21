@@ -16,6 +16,7 @@ type Sampler struct {
 	MaxRetries           int
 	InitialBackoff       time.Duration
 	JitterWindow         time.Duration
+	RecoveryWindow       time.Duration
 	MetricsListenAddress string
 }
 
@@ -41,6 +42,10 @@ func LoadSampler(lookup func(string) string) (Sampler, error) {
 	if err != nil {
 		return Sampler{}, fmt.Errorf("REPLICASENSE_SAMPLING_JITTER_WINDOW: %w", err)
 	}
+	recoveryWindow, err := durationOrDefault(lookup("REPLICASENSE_SAMPLING_RECOVERY_WINDOW"), 24*time.Hour)
+	if err != nil {
+		return Sampler{}, fmt.Errorf("REPLICASENSE_SAMPLING_RECOVERY_WINDOW: %w", err)
+	}
 	concurrency, err := positiveIntOrDefault(lookup("REPLICASENSE_SAMPLING_MAX_CONCURRENT"), 8)
 	if err != nil {
 		return Sampler{}, fmt.Errorf("REPLICASENSE_SAMPLING_MAX_CONCURRENT: %w", err)
@@ -49,7 +54,7 @@ func LoadSampler(lookup func(string) string) (Sampler, error) {
 	if err != nil {
 		return Sampler{}, fmt.Errorf("REPLICASENSE_SAMPLING_MAX_RETRIES: %w", err)
 	}
-	return Sampler{ClusterID: clusterID, DatabaseURL: databaseURL, TickInterval: tickInterval, MaxConcurrent: concurrency, QueryTimeout: timeout, MaxRetries: retries, InitialBackoff: backoff, JitterWindow: jitter, MetricsListenAddress: valueOrDefault(lookup("REPLICASENSE_METRICS_LISTEN_ADDRESS"), ":8080")}, nil
+	return Sampler{ClusterID: clusterID, DatabaseURL: databaseURL, TickInterval: tickInterval, MaxConcurrent: concurrency, QueryTimeout: timeout, MaxRetries: retries, InitialBackoff: backoff, JitterWindow: jitter, RecoveryWindow: recoveryWindow, MetricsListenAddress: valueOrDefault(lookup("REPLICASENSE_METRICS_LISTEN_ADDRESS"), ":8080")}, nil
 }
 
 func durationOrDefault(raw string, defaultValue time.Duration) (time.Duration, error) {

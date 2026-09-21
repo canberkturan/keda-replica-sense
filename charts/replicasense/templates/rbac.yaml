@@ -10,6 +10,15 @@ metadata:
     app.kubernetes.io/component: {{ $component }}
 {{- end }}
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "replicasense.componentName" (dict "root" . "component" "controller") }}
+spec:
+  minAvailable: {{ .Values.controller.pdb.minAvailable }}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: controller}
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

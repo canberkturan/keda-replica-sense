@@ -55,6 +55,8 @@ func (r *SampleRepository) ListActiveForCluster(ctx context.Context, clusterID s
 			&samplingIntervalSeconds,
 			&workload.Spec.Forecast.ModelEngine,
 			&workload.Spec.Forecast.BusinessTimezone,
+			&workload.Spec.Forecast.ImmediateTraining,
+			&workload.Spec.Forecast.ClearOldModels,
 			&workload.Spec.PolicyRevision,
 		); err != nil {
 			return nil, fmt.Errorf("scan active sampling workload: %w", err)
@@ -125,7 +127,7 @@ SELECT
     scale_target_name, min_replica_count, max_replica_count, source_trigger_name,
     prometheus_server_address, prometheus_query, reactive_threshold,
     source_fingerprint, forecast_horizon_seconds, startup_latency_seconds, safety_buffer_seconds, forecast_quantile,
-    training_window_seconds, sampling_interval_seconds, model_engine, business_timezone, policy_revision
+    training_window_seconds, sampling_interval_seconds, model_engine, business_timezone, immediate_training, clear_old_models, policy_revision
 FROM workloads
 WHERE cluster_id = $1 AND status = 'active'
 ORDER BY namespace, scaled_object_name, predictive_trigger_name`

@@ -15,8 +15,10 @@ import (
 	externalscaler "github.com/kedacore/keda/v2/pkg/scalers/externalscaler"
 	"google.golang.org/grpc"
 
+	"github.com/canberkturan/keda-replica-sense/internal/observability"
 	"github.com/canberkturan/keda-replica-sense/internal/postgres"
 	"github.com/canberkturan/keda-replica-sense/internal/scaler"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -45,12 +47,22 @@ func main() {
 	defer pool.Close()
 	repository := postgres.NewForecastRepository(pool)
 	cache := scaler.NewSnapshotCache(clusterID, repository)
+	metricsRegistry := prometheus.NewRegistry()
+	metricsRegistry.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	metrics := observability.NewScalerMetrics(metricsRegistry)
+	metricsAddress := os.Getenv("REPLICASENSE_METRICS_LISTEN_ADDRESS")
+	if metricsAddress == "" {
+		metricsAddress = ":8080"
+	}
+	observability.StartMetricsServer(ctx, metricsAddress, metricsRegistry, func(err error) {
+		fmt.Fprintln(os.Stderr, "serve metrics:", err)
+	})
 	if err := cache.Refresh(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, "initial snapshot refresh:", err)
 	}
 	refreshSnapshots(ctx, cache, snapshotRefreshInterval())
 	server := grpc.NewServer()
-	externalscaler.RegisterExternalScalerServer(server, scaler.Server{ClusterID: clusterID, SnapshotReader: cache})
+	externalscaler.RegisterExternalScalerServer(server, scaler.Server{ClusterID: clusterID, SnapshotReader: cache, Observer: metrics})
 	go func() {
 		<-ctx.Done()
 		server.GracefulStop()

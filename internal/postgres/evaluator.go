@@ -12,9 +12,12 @@ type Evaluator struct{ database *pgxpool.Pool }
 
 func NewEvaluator(pool *pgxpool.Pool) *Evaluator { return &Evaluator{database: pool} }
 
-// EvaluateMatured evaluates forecasts only after their full horizon has passed.
+// EvaluateMatured evaluates forecasts only after their full horizon has passed
+// from the observation used as the model's prediction point. GeneratedAt can
+// differ from ObservedAt because sampling is deliberately jittered and model
+// inference itself takes time.
 func (e *Evaluator) EvaluateMatured(ctx context.Context, now time.Time) error {
-	rows, err := e.database.Query(ctx, `SELECT id,workload_id,source_fingerprint,generated_at,forecast_horizon_seconds,forecast_p95 FROM forecast_snapshots WHERE evaluated_at IS NULL AND generated_at + forecast_horizon_seconds * interval '1 second' <= $1 ORDER BY generated_at LIMIT 100`, now)
+	rows, err := e.database.Query(ctx, `SELECT id,workload_id,source_fingerprint,observed_at,forecast_horizon_seconds,forecast_p95 FROM forecast_snapshots WHERE evaluated_at IS NULL AND observed_at + forecast_horizon_seconds * interval '1 second' <= $1 ORDER BY observed_at LIMIT 100`, now)
 	if err != nil {
 		return fmt.Errorf("list matured forecasts: %w", err)
 	}
@@ -22,14 +25,14 @@ func (e *Evaluator) EvaluateMatured(ctx context.Context, now time.Time) error {
 	for rows.Next() {
 		var id int64
 		var workloadID, fp string
-		var generated time.Time
+		var observed time.Time
 		var seconds int64
 		var p95 float64
-		if err := rows.Scan(&id, &workloadID, &fp, &generated, &seconds, &p95); err != nil {
+		if err := rows.Scan(&id, &workloadID, &fp, &observed, &seconds, &p95); err != nil {
 			return err
 		}
 		var actual *float64
-		err := e.database.QueryRow(ctx, `SELECT max(observed_value) FROM samples WHERE workload_id=$1 AND source_fingerprint=$2 AND observed_at > $3 AND observed_at <= $3 + $4 * interval '1 second'`, workloadID, fp, generated, seconds).Scan(&actual)
+		err := e.database.QueryRow(ctx, `SELECT max(observed_value) FROM samples WHERE workload_id=$1 AND source_fingerprint=$2 AND observed_at > $3 AND observed_at <= $3 + $4 * interval '1 second'`, workloadID, fp, observed, seconds).Scan(&actual)
 		if err != nil {
 			return err
 		}

@@ -24,10 +24,18 @@ type Server struct {
 		LatestSnapshot(context.Context, forecast.Lookup) (*domain.ForecastSnapshot, error)
 	}
 	SnapshotMaxAge time.Duration
+	// SourceMaxAge independently bounds the age of the observation used to make
+	// a snapshot. GeneratedAt alone is insufficient because a forecaster could
+	// otherwise keep regenerating a prediction from frozen source data.
+	SourceMaxAge time.Duration
+	Observer     interface {
+		RecordRequest(method string, served bool, age time.Duration)
+	}
 }
 
 func (s Server) IsActive(ctx context.Context, reference *externalscaler.ScaledObjectRef) (*externalscaler.IsActiveResponse, error) {
 	snapshot, ok := s.snapshot(ctx, reference)
+	s.record("is_active", snapshot, ok)
 	return &externalscaler.IsActiveResponse{Result: ok && snapshot.SafeDemand > 0}, nil
 }
 
@@ -46,11 +54,23 @@ func (s Server) GetMetrics(ctx context.Context, request *externalscaler.GetMetri
 		return nil, fmt.Errorf("unknown metric %q", request.GetMetricName())
 	}
 	snapshot, ok := s.snapshot(ctx, request.GetScaledObjectRef())
+	s.record("get_metrics", snapshot, ok)
 	value := float64(0)
 	if ok {
 		value = snapshot.SafeDemand
 	}
 	return &externalscaler.GetMetricsResponse{MetricValues: []*externalscaler.MetricValue{{MetricName: MetricName, MetricValueFloat: value}}}, nil
+}
+
+func (s Server) record(method string, snapshot *domain.ForecastSnapshot, served bool) {
+	if s.Observer == nil {
+		return
+	}
+	age := time.Duration(0)
+	if snapshot != nil {
+		age = time.Since(snapshot.GeneratedAt)
+	}
+	s.Observer.RecordRequest(method, served, age)
 }
 
 func (s Server) snapshot(ctx context.Context, reference *externalscaler.ScaledObjectRef) (*domain.ForecastSnapshot, bool) {
@@ -69,7 +89,22 @@ func (s Server) snapshot(ctx context.Context, reference *externalscaler.ScaledOb
 	if maxAge <= 0 {
 		maxAge = 2 * time.Minute
 	}
-	return snapshot, time.Since(snapshot.GeneratedAt) <= maxAge
+	sourceMaxAge := s.SourceMaxAge
+	if sourceMaxAge <= 0 {
+		sourceMaxAge = maxAge
+	}
+	now := time.Now()
+	return snapshot, snapshotFresh(snapshot.GeneratedAt, now, maxAge) && snapshotFresh(snapshot.ObservedAt, now, sourceMaxAge)
+}
+
+// snapshotFresh rejects both stale and future-dated snapshots. Accepting a
+// future timestamp would turn a clock-skew or corrupt database row into an
+// indefinitely fresh predictive recommendation.
+func snapshotFresh(generatedAt, now time.Time, maxAge time.Duration) bool {
+	if generatedAt.After(now) {
+		return false
+	}
+	return now.Sub(generatedAt) <= maxAge
 }
 
 func (Server) StreamIsActive(_ *externalscaler.ScaledObjectRef, stream grpc.ServerStreamingServer[externalscaler.IsActiveResponse]) error {

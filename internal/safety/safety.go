@@ -9,7 +9,25 @@ type SurgeInput struct {
 	CurrentSlopePerMinute float64
 	HistoricalSlopeP95    float64
 	LeadTimeMinutes       float64
-	MaxMultiplier         float64
+}
+
+// SurgePolicy controls deterministic protection for demand patterns that are
+// not represented by the trained model. The defaults deliberately favor a
+// sustained, material increase over reacting to one noisy observation.
+type SurgePolicy struct {
+	SlopeMultiplier     float64
+	BaselineMultiplier  float64
+	ConfirmationSamples int
+	MaxMultiplier       float64
+}
+
+func DefaultSurgePolicy() SurgePolicy {
+	return SurgePolicy{
+		SlopeMultiplier:     3,
+		BaselineMultiplier:  1.5,
+		ConfirmationSamples: 2,
+		MaxMultiplier:       1.5,
+	}
 }
 
 type SurgeResult struct {
@@ -20,26 +38,49 @@ type SurgeResult struct {
 
 // DetectSurge predicts only across pod readiness lead time, never the full ML
 // horizon. This prevents a short spike from becoming an unbounded extrapolation.
-func DetectSurge(in SurgeInput) SurgeResult {
+func DetectSurge(in SurgeInput, policy SurgePolicy) SurgeResult {
 	if in.LeadTimeMinutes <= 0 {
 		return SurgeResult{}
 	}
-	ratio := 0.0
-	if in.HistoricalSlopeP95 > 0 {
-		ratio = in.CurrentSlopePerMinute / in.HistoricalSlopeP95
-	}
-	baselineRatio := 0.0
-	if in.RecentBaseline > 0 {
-		baselineRatio = in.CurrentValue / in.RecentBaseline
-	}
-	if ratio < 2 && baselineRatio < 3 {
+	policy = normalizedSurgePolicy(policy)
+	if !IsSurgeCandidate(in, policy) {
 		return SurgeResult{}
 	}
 	demand := in.CurrentValue + math.Max(0, in.CurrentSlopePerMinute)*in.LeadTimeMinutes
-	if in.MaxMultiplier > 1 {
-		demand = math.Min(demand, in.CurrentValue*in.MaxMultiplier)
+	if policy.MaxMultiplier > 1 {
+		demand = math.Min(demand, in.CurrentValue*policy.MaxMultiplier)
 	}
-	return SurgeResult{true, demand, "abnormal_slope_or_baseline"}
+	return SurgeResult{true, demand, "sustained_abnormal_slope_and_baseline"}
+}
+
+// IsSurgeCandidate requires both fast growth compared with history and a
+// material move above the recent baseline. A flat historical slope treats any
+// positive slope as anomalous, but only together with the baseline test.
+func IsSurgeCandidate(in SurgeInput, policy SurgePolicy) bool {
+	policy = normalizedSurgePolicy(policy)
+	if in.CurrentSlopePerMinute <= 0 || in.RecentBaseline <= 0 {
+		return false
+	}
+	slopeAbnormal := in.HistoricalSlopeP95 <= 0 || in.CurrentSlopePerMinute >= in.HistoricalSlopeP95*policy.SlopeMultiplier
+	baselineAbnormal := in.CurrentValue >= in.RecentBaseline*policy.BaselineMultiplier
+	return slopeAbnormal && baselineAbnormal
+}
+
+func normalizedSurgePolicy(policy SurgePolicy) SurgePolicy {
+	defaults := DefaultSurgePolicy()
+	if policy.SlopeMultiplier <= 1 {
+		policy.SlopeMultiplier = defaults.SlopeMultiplier
+	}
+	if policy.BaselineMultiplier <= 1 {
+		policy.BaselineMultiplier = defaults.BaselineMultiplier
+	}
+	if policy.ConfirmationSamples < 1 {
+		policy.ConfirmationSamples = defaults.ConfirmationSamples
+	}
+	if policy.MaxMultiplier <= 1 {
+		policy.MaxMultiplier = defaults.MaxMultiplier
+	}
+	return policy
 }
 
 type GuardrailInput struct {
