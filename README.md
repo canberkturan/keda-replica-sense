@@ -61,9 +61,10 @@ The CI workflow verifies both the portable build and `go test -tags xgboost
 For `modelEngine: gru`, ReplicaSense can route only the short-lived Trainer
 Job to the CPU-only PyTorch image. The artifact contains numeric tensors, not
 pickle or TorchScript; the Go forecaster validates and evaluates it locally.
-Set `trainer.images.gru` to the published `replicasense-trainer:<version>-pytorch-gru`
-tag. GRU candidates must still pass the same temporal validation and promotion
-gate as every other model.
+The chart routes GRU Jobs to the release-matched PyTorch image by default.
+Override `trainer.images.gru` only to use a mirrored or digest-pinned image.
+GRU candidates must still pass the same temporal validation and promotion gate
+as every other model.
 
 See [the PyTorch GRU guide](docs/pytorch-gru.md) for the CPU image, resource
 budget, temporal validation, and promotion behaviour.

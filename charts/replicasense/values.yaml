@@ -123,10 +123,10 @@ components:
 
 trainer:
   images:
-    # Leave empty until a matching PyTorch GRU image tag has been published.
-    # When set, only modelEngine: gru Jobs use this CPU-only image; all other
-    # engines continue using components.training-scheduler.env.REPLICASENSE_TRAINER_IMAGE.
-    gru: ""
+    # Only modelEngine: gru Jobs use this CPU-only image. Override it when
+    # mirroring ReplicaSense images into a private enterprise registry; all
+    # other engines use components.training-scheduler.env.REPLICASENSE_TRAINER_IMAGE.
+    gru: ghcr.io/canberkturan/replicasense-trainer:0.3.5-pytorch-gru
   # These bounds apply to short-lived Trainer Jobs, not the scheduler pod.
   # XGBoost and PyTorch training can be CPU and memory intensive; raise them
   # only after measuring a realistic workload and retaining cluster headroom.
