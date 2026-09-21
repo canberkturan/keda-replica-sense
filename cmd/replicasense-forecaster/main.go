@@ -15,6 +15,7 @@ import (
 	"github.com/canberkturan/keda-replica-sense/internal/kube"
 	"github.com/canberkturan/keda-replica-sense/internal/observability"
 	"github.com/canberkturan/keda-replica-sense/internal/postgres"
+	"github.com/canberkturan/keda-replica-sense/internal/safety"
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -65,7 +66,12 @@ func main() {
 	observability.StartMetricsServer(ctx, valueOrDefault("REPLICASENSE_METRICS_LISTEN_ADDRESS", ":8080"), metricsRegistry, func(err error) {
 		fmt.Fprintln(os.Stderr, "serve metrics:", err)
 	})
-	service := forecaster.Service{Samples: repo, Snapshots: forecastRepository, SeasonalPeriod: period, MinimumSamples: minimum, DisableSurgeDetection: boolEnv("REPLICASENSE_DISABLE_SURGE_DETECTION", false), Models: modelCache, CurrentReplicas: func(ctx context.Context, w workloadstore.SamplingWorkload) (float64, error) {
+	surgePolicy := safety.DefaultSurgePolicy()
+	surgePolicy.SlopeMultiplier = multiplierEnv("REPLICASENSE_SURGE_SLOPE_MULTIPLIER", surgePolicy.SlopeMultiplier)
+	surgePolicy.BaselineMultiplier = multiplierEnv("REPLICASENSE_SURGE_BASELINE_MULTIPLIER", surgePolicy.BaselineMultiplier)
+	surgePolicy.ConfirmationSamples = positiveIntEnv("REPLICASENSE_SURGE_CONFIRMATION_SAMPLES", surgePolicy.ConfirmationSamples)
+	surgePolicy.MaxMultiplier = multiplierEnv("REPLICASENSE_SURGE_MAX_MULTIPLIER", surgePolicy.MaxMultiplier)
+	service := forecaster.Service{Samples: repo, Snapshots: forecastRepository, SeasonalPeriod: period, MinimumSamples: minimum, DisableSurgeDetection: boolEnv("REPLICASENSE_DISABLE_SURGE_DETECTION", false), SurgePolicy: surgePolicy, Models: modelCache, CurrentReplicas: func(ctx context.Context, w workloadstore.SamplingWorkload) (float64, error) {
 		return replicaReader.CurrentReplicas(ctx, w.Spec.Key.Namespace, w.Spec.ScaleTarget.Name)
 	}, ClusterHealthy: healthChecker.Healthy}
 	service.PredictiveAllowed = func(ctx context.Context, w workloadstore.SamplingWorkload, current, desired float64) bool {
@@ -127,6 +133,15 @@ func intEnv(name string, fallback int) int {
 	return fallback
 }
 
+func positiveIntEnv(name string, fallback int) int {
+	if raw := os.Getenv(name); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
 func boolEnv(name string, fallback bool) bool {
 	if raw := os.Getenv(name); raw != "" {
 		if value, err := strconv.ParseBool(raw); err == nil {
@@ -139,6 +154,15 @@ func boolEnv(name string, fallback bool) bool {
 func headroomFractionEnv(name string, fallback float64) float64 {
 	if raw := os.Getenv(name); raw != "" {
 		if value, err := strconv.ParseFloat(raw, 64); err == nil && value > 0 && value <= 1 {
+			return value
+		}
+	}
+	return fallback
+}
+
+func multiplierEnv(name string, fallback float64) float64 {
+	if raw := os.Getenv(name); raw != "" {
+		if value, err := strconv.ParseFloat(raw, 64); err == nil && value > 1 && !math.IsNaN(value) && !math.IsInf(value, 0) {
 			return value
 		}
 	}

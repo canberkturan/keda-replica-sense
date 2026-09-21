@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/canberkturan/keda-replica-sense/internal/domain"
 	"github.com/canberkturan/keda-replica-sense/internal/forecast"
+	"github.com/canberkturan/keda-replica-sense/internal/safety"
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
 	"testing"
 	"time"
@@ -116,16 +117,17 @@ func TestForecastPersistsSurgeProjectionAsOperationalP95(t *testing.T) {
 		{ObservedAt: start.Add(time.Minute), ObservedValue: 1},
 		{ObservedAt: start.Add(2 * time.Minute), ObservedValue: 1},
 		{ObservedAt: start.Add(3 * time.Minute), ObservedValue: 1},
-		{ObservedAt: start.Add(4 * time.Minute), ObservedValue: 1},
-		{ObservedAt: start.Add(5 * time.Minute), ObservedValue: 10},
+		{ObservedAt: start.Add(4 * time.Minute), ObservedValue: 2},
+		{ObservedAt: start.Add(5 * time.Minute), ObservedValue: 6},
+		{ObservedAt: start.Add(6 * time.Minute), ObservedValue: 12},
 	}
 	out := &snapshots{}
-	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 30}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 6 * time.Minute, Horizon: time.Minute}}}
-	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 6, MaxAbsoluteStep: 30}.Forecast(context.Background(), w, start.Add(6*time.Minute))
+	w := workloadstore.SamplingWorkload{ID: "id", Spec: domain.WorkloadSpec{Key: domain.WorkloadKey{ClusterID: "c"}, Bounds: domain.ReplicaBounds{Max: 30}, Source: domain.PrometheusSource{Threshold: 1}, SourceFingerprint: "x", Forecast: domain.ForecastConfig{SamplingInterval: time.Minute, TrainingWindow: 7 * time.Minute, Horizon: time.Minute}}}
+	got, err := Service{Samples: samples{vals}, Snapshots: out, SeasonalPeriod: 2 * time.Minute, MinimumSamples: 7, MaxAbsoluteStep: 30}.Forecast(context.Background(), w, start.Add(7*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ForecastP95 != 1 || got.SurgeDemand != 20 || got.SafetyReason != "abnormal_slope_or_baseline;rate_limited" {
+	if got.ForecastP95 != 6 || got.SurgeDemand != 18 || got.SafetyReason != "sustained_abnormal_slope_and_baseline;rate_limited" {
 		t.Fatalf("Forecast() = %#v", got)
 	}
 }
@@ -153,7 +155,7 @@ func TestForecastCanDisableSurgeDetectionForModelEvaluation(t *testing.T) {
 
 func TestDetectSurgeUsesWorkloadAwareLeadTime(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	values := []float64{1, 1, 1, 1, 4, 5}
+	values := []float64{1, 1, 1, 1, 2, 6, 12}
 	samples := make([]domain.Sample, len(values))
 	for i, value := range values {
 		samples[i] = domain.Sample{ObservedAt: start.Add(time.Duration(i) * time.Minute), ObservedValue: value}
@@ -163,17 +165,43 @@ func TestDetectSurgeUsesWorkloadAwareLeadTime(t *testing.T) {
 		lead time.Duration
 		want float64
 	}{
-		{name: "30 second startup", lead: 30 * time.Second, want: 5.5},
-		{name: "two minute startup", lead: 2 * time.Minute, want: 7},
-		{name: "five minute startup", lead: 5 * time.Minute, want: 10},
+		{name: "30 second startup", lead: 30 * time.Second, want: 15},
+		{name: "two minute startup", lead: 2 * time.Minute, want: 18},
+		{name: "five minute startup", lead: 5 * time.Minute, want: 18},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := detectSurge(samples, time.Minute, test.lead)
+			got := detectSurge(samples, time.Minute, test.lead, safety.DefaultSurgePolicy())
 			if !got.Triggered || got.Demand != test.want {
 				t.Fatalf("surge = %#v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDetectSurgeRequiresTwoConsecutiveCandidates(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	values := []float64{1, 1, 1, 1, 1, 1, 5}
+	samples := make([]domain.Sample, len(values))
+	for i, value := range values {
+		samples[i] = domain.Sample{ObservedAt: start.Add(time.Duration(i) * time.Minute), ObservedValue: value}
+	}
+	if got := detectSurge(samples, time.Minute, 2*time.Minute, safety.DefaultSurgePolicy()); got.Triggered {
+		t.Fatalf("single observation triggered surge: %#v", got)
+	}
+}
+
+func TestDetectSurgeHonorsConfiguredConfirmationCount(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	values := []float64{1, 1, 1, 1, 1, 5}
+	samples := make([]domain.Sample, len(values))
+	for i, value := range values {
+		samples[i] = domain.Sample{ObservedAt: start.Add(time.Duration(i) * time.Minute), ObservedValue: value}
+	}
+	policy := safety.DefaultSurgePolicy()
+	policy.ConfirmationSamples = 1
+	if got := detectSurge(samples, time.Minute, 2*time.Minute, policy); !got.Triggered {
+		t.Fatalf("one configured confirmation did not trigger: %#v", got)
 	}
 }
 

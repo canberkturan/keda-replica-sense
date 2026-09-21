@@ -69,7 +69,7 @@ clusters; it does not need to be globally public.
 ```bash
 helm upgrade --install replicasense \
   oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.3.2 \
+  --version 0.3.5 \
   --namespace replicasense-system \
   --set clusterID=cluster-east-1
 ```
@@ -122,6 +122,12 @@ components:
     env:
       REPLICASENSE_CLUSTER_SPECULATIVE_REPLICA_BUDGET: "40"
       REPLICASENSE_SPECULATIVE_HEADROOM_FRACTION: "0.20"
+      # Conservative default: two consecutive samples must have both an
+      # abnormal slope and a rise above the recent baseline.
+      REPLICASENSE_SURGE_SLOPE_MULTIPLIER: "3"
+      REPLICASENSE_SURGE_BASELINE_MULTIPLIER: "1.5"
+      REPLICASENSE_SURGE_CONFIRMATION_SAMPLES: "2"
+      REPLICASENSE_SURGE_MAX_MULTIPLIER: "1.5"
   sampler:
     env:
       # Limits post-outage history repair. Keep it within Prometheus query

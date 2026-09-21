@@ -34,9 +34,17 @@ type WorkloadSink interface {
 	DeactivateScaledObject(context.Context, ScaledObjectReference) error
 }
 
+// TriggerConfigObserver exports the bounded, safe configuration identity of
+// every trigger belonging to a ReplicaSense-managed ScaledObject.
+type TriggerConfigObserver interface {
+	Record(clusterID, namespace, scaledObject string, triggers []scaledobject.TriggerInput, result scaledobject.ParseResult)
+	Delete(clusterID, namespace, scaledObject string)
+}
+
 type Processor struct {
 	ParserOptions scaledobject.ParserOptions
 	Sink          WorkloadSink
+	TriggerConfig TriggerConfigObserver
 }
 
 func (p Processor) ObserveScaledObject(ctx context.Context, object *kedav1alpha1.ScaledObject) error {
@@ -47,17 +55,32 @@ func (p Processor) ObserveScaledObject(ctx context.Context, object *kedav1alpha1
 	if err != nil {
 		return err
 	}
-	return p.Sink.Observe(ctx, Observation{
-		Source: p.reference(input.Namespace, input.Name, input.UID, input.Generation),
-		Result: scaledobject.Parse(input, p.ParserOptions),
-	})
+	reference := p.reference(input.Namespace, input.Name, input.UID, input.Generation)
+	result := scaledobject.Parse(input, p.ParserOptions)
+	if err := p.Sink.Observe(ctx, Observation{
+		Source: reference,
+		Result: result,
+	}); err != nil {
+		return err
+	}
+	if p.TriggerConfig != nil {
+		p.TriggerConfig.Record(reference.ClusterID, reference.Namespace, reference.ScaledObjectName, input.Triggers, result)
+	}
+	return nil
 }
 
 func (p Processor) DeactivateScaledObject(ctx context.Context, namespace, name string) error {
 	if p.Sink == nil {
 		return fmt.Errorf("workload sink is required")
 	}
-	return p.Sink.DeactivateScaledObject(ctx, p.reference(namespace, name, "", 0))
+	reference := p.reference(namespace, name, "", 0)
+	if err := p.Sink.DeactivateScaledObject(ctx, reference); err != nil {
+		return err
+	}
+	if p.TriggerConfig != nil {
+		p.TriggerConfig.Delete(reference.ClusterID, reference.Namespace, reference.ScaledObjectName)
+	}
+	return nil
 }
 
 func (p Processor) reference(namespace, name, uid string, generation int64) ScaledObjectReference {

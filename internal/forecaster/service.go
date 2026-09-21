@@ -31,6 +31,7 @@ type Service struct {
 	// DisableSurgeDetection is an explicit operational switch. Production
 	// defaults to the independent surge policy.
 	DisableSurgeDetection bool
+	SurgePolicy           safety.SurgePolicy
 	Models                interface {
 		ModelFor(workloadstore.SamplingWorkload) (forecast.Model, bool)
 	}
@@ -97,7 +98,7 @@ func (s Service) Forecast(ctx context.Context, workload workloadstore.SamplingWo
 	}
 	surge := safety.SurgeResult{}
 	if !s.DisableSurgeDetection {
-		surge = detectSurge(samples, interval, surgeLeadTime(workload.Spec.Forecast))
+		surge = detectSurge(samples, interval, surgeLeadTime(workload.Spec.Forecast), s.SurgePolicy)
 	}
 	raw := prediction.P95
 	surgeDemand := 0.0
@@ -161,26 +162,54 @@ func surgeLeadTime(config domain.ForecastConfig) time.Duration {
 	return leadTime
 }
 
-func detectSurge(samples []domain.Sample, interval, leadTime time.Duration) safety.SurgeResult {
-	if len(samples) < 6 || interval <= 0 {
+func detectSurge(samples []domain.Sample, interval, leadTime time.Duration, policy safety.SurgePolicy) safety.SurgeResult {
+	const baselineSamples = 5
+	confirmationSamples := policy.ConfirmationSamples
+	if confirmationSamples < 1 {
+		confirmationSamples = safety.DefaultSurgePolicy().ConfirmationSamples
+	}
+	if len(samples) < confirmationSamples+baselineSamples || interval <= 0 {
 		return safety.SurgeResult{}
 	}
 	minutes := interval.Minutes()
 	if minutes <= 0 {
 		return safety.SurgeResult{}
 	}
-	slopes := make([]float64, 0, len(samples)-2)
-	for i := 1; i < len(samples)-1; i++ {
+	// Keep the candidate observations out of the historical percentile. They
+	// must be evaluated against history rather than watering down the anomaly.
+	historyEnd := len(samples) - confirmationSamples
+	slopes := make([]float64, 0, historyEnd-1)
+	for i := 1; i < historyEnd; i++ {
 		slopes = append(slopes, (samples[i].ObservedValue-samples[i-1].ObservedValue)/minutes)
+	}
+	if len(slopes) == 0 {
+		return safety.SurgeResult{}
 	}
 	sort.Float64s(slopes)
 	p95 := slopes[int(math.Ceil(float64(len(slopes))*0.95))-1]
-	var baseline float64
-	for i := len(samples) - 6; i < len(samples)-1; i++ {
-		baseline += samples[i].ObservedValue
+	for candidate := len(samples) - confirmationSamples; candidate < len(samples); candidate++ {
+		var baseline float64
+		for i := candidate - baselineSamples; i < candidate; i++ {
+			baseline += samples[i].ObservedValue
+		}
+		baseline /= baselineSamples
+		input := safety.SurgeInput{
+			CurrentValue:          samples[candidate].ObservedValue,
+			RecentBaseline:        baseline,
+			CurrentSlopePerMinute: (samples[candidate].ObservedValue - samples[candidate-1].ObservedValue) / minutes,
+			HistoricalSlopeP95:    p95,
+			LeadTimeMinutes:       leadTime.Minutes(),
+		}
+		if !safety.IsSurgeCandidate(input, policy) {
+			return safety.SurgeResult{}
+		}
 	}
-	baseline /= 5
 	last := samples[len(samples)-1].ObservedValue
 	previous := samples[len(samples)-2].ObservedValue
-	return safety.DetectSurge(safety.SurgeInput{CurrentValue: last, RecentBaseline: baseline, CurrentSlopePerMinute: (last - previous) / minutes, HistoricalSlopeP95: p95, LeadTimeMinutes: leadTime.Minutes(), MaxMultiplier: 2})
+	var baseline float64
+	for i := len(samples) - baselineSamples - 1; i < len(samples)-1; i++ {
+		baseline += samples[i].ObservedValue
+	}
+	baseline /= baselineSamples
+	return safety.DetectSurge(safety.SurgeInput{CurrentValue: last, RecentBaseline: baseline, CurrentSlopePerMinute: (last - previous) / minutes, HistoricalSlopeP95: p95, LeadTimeMinutes: leadTime.Minutes()}, policy)
 }
