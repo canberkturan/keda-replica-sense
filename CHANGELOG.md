@@ -4,6 +4,14 @@ This project follows semantic versioning. The notes below describe the
 production-facing changes introduced after `v0.2.6` and delivered by the
 `v0.3.5` release line.
 
+## Unreleased
+
+### Changed
+
+- Made the release-matched CPU PyTorch Trainer the default for `modelEngine:
+  gru`. Private registries can override `trainer.images.gru` without affecting
+  XGBoost or baseline Jobs.
+
 ## 0.3.5 — 2026-09-21
 
 ### Predictive models and training
@@ -15,9 +23,6 @@ production-facing changes introduced after `v0.2.6` and delivered by the
 - Added a CPU-only PyTorch GRU Trainer image. It exports validated numeric JSON
   tensors; the always-on Go forecaster evaluates the artifact without loading
   pickle or TorchScript.
-- Made the release-matched CPU PyTorch Trainer the default for `modelEngine:
-  gru`. Private registries can override `trainer.images.gru` without affecting
-  XGBoost or baseline Jobs.
 - Added `immediateTraining` for an idempotent training Job when a predictive
   trigger is created or materially changed.
 - Added `clearOldModels`. When paired with immediate training it removes the
