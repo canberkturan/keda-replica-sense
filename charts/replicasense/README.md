@@ -35,11 +35,11 @@ values file. An image `digest`, when set for a component, takes precedence over
 its `tag`.
 
 Published releases are available as an OCI chart. For example, after the
-`v0.3.5` Git tag completes the release workflow:
+`v0.3.6` Git tag completes the release workflow:
 
 ```bash
 helm upgrade --install replicasense oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.3.5 \
+  --version 0.3.6 \
   --namespace replicasense-system \
   --set clusterID=YOUR_CLUSTER_ID
 ```

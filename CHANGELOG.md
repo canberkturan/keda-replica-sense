@@ -1,12 +1,10 @@
 # Changelog
 
 This project follows semantic versioning. The notes below describe the
-production-facing changes introduced after `v0.2.6` and delivered by the
-`v0.3.5` release line.
+production-facing changes introduced after `v0.2.6` and delivered through the
+`v0.3.6` release line.
 
-## Unreleased
-
-### Changed
+## 0.3.6 — 2026-09-21
 
 - Made the release-matched CPU PyTorch Trainer the default for `modelEngine:
   gru`. Private registries can override `trainer.images.gru` without affecting
@@ -74,7 +72,7 @@ production-facing changes introduced after `v0.2.6` and delivered by the
 - Added release builds for the CPU-only PyTorch GRU Trainer and expanded GHCR
   publishing for all runtime images and the OCI Helm chart.
 - Added native-XGBoost image verification to CI.
-- Added Artifact Hub metadata for releases through `0.3.5`.
+- Added Artifact Hub metadata for releases through `0.3.6`.
 - Reworked the public, enterprise-installation, architecture, metrics,
   PyTorch-GRU, chart, and contributing documentation. The guides now cover
   topology, trigger composition, training, model selection, capacity planning,
