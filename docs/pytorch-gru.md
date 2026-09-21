@@ -13,16 +13,17 @@ the default and is generally the better first choice for one metric plus
 calendar features. GRU has a larger CPU and memory footprint and should be
 tested against XGBoost using the same ScaledObject settings and source data.
 
-## Enable the published CPU image
+## Default CPU image and private registries
 
-After installing a ReplicaSense release that includes the PyTorch image, set
-the GRU Job image to that exact release tag:
+The chart already routes GRU training Jobs to the release-matched CPU PyTorch
+image. Set `trainer.images.gru` only when your organization mirrors images into
+a private registry or wants to pin a digest:
 
 ```bash
 helm upgrade --install replicasense oci://ghcr.io/canberkturan/charts/replicasense \
   --version <version> --namespace replicasense-system \
   --set clusterID=<cluster-id> \
-  --set trainer.images.gru=ghcr.io/canberkturan/replicasense-trainer:<version>-pytorch-gru
+  --set trainer.images.gru=registry.example.com/platform/replicasense-trainer:<version>-pytorch-gru
 ```
 
 Only Jobs for `modelEngine: gru` use this image. XGBoost and baseline engines

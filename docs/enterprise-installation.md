@@ -69,7 +69,7 @@ clusters; it does not need to be globally public.
 ```bash
 helm upgrade --install replicasense \
   oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.3.5 \
+  --version 0.3.6 \
   --namespace replicasense-system \
   --set clusterID=cluster-east-1
 ```
@@ -180,9 +180,11 @@ Set `modelEngine: gru` when a workload has a stable repeating pattern but the
 most recent demand sequence also carries useful shape information. GRU uses
 the last 60 samples and the configured business-time clock, day-of-week, day-of-month,
 month, and weekend signals. It predicts a future-horizon maximum, not an
-unpredictable incident; retain the native trigger and surge protection. GRU is
-included in the standard Go runtime—no separate Trainer or Forecaster image is
-needed.
+unpredictable incident; retain the native trigger and surge protection. The
+always-on Forecaster remains in the standard Go runtime. The chart routes only
+short-lived GRU training Jobs to the release-matched CPU PyTorch Trainer image
+by default; no additional installation setting is required unless images are
+mirrored into a private registry.
 
 For common model choices, training behavior, and the meaning of a
 horizon-maximum forecast, see [architecture.md](architecture.md). A forecast
