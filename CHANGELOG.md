@@ -2,7 +2,16 @@
 
 This project follows semantic versioning. The notes below describe the
 production-facing changes introduced after `v0.2.6` and delivered through the
-`v0.3.6` release line.
+`v0.3.7` release line.
+
+## 0.3.7 — 2026-10-02
+
+- Linked the native XGBoost trainer and forecaster into static, non-root images
+  with no Debian runtime packages. The images retain CA certificates for TLS.
+- Moved the CPU PyTorch GRU Trainer to a non-root distroless Python runtime and
+  updated its Python, PyTorch, NumPy, and PostgreSQL driver dependencies.
+- Kept GRU training on the release-matched CPU image and refreshed all chart
+  defaults and Artifact Hub image references to the 0.3.7 release.
 
 ## 0.3.6 — 2026-09-21
 
