@@ -5,7 +5,7 @@ package xgboost
 
 /*
 #cgo CFLAGS: -I/opt/xgboost/include
-#cgo LDFLAGS: -L/usr/local/lib -Wl,-rpath,/usr/local/lib -lxgboost
+#cgo LDFLAGS: -L/opt/xgboost/lib -lxgboost -ldmlc -lstdc++ -lm -ldl -lpthread -lrt
 #include <stdlib.h>
 #include <xgboost/c_api.h>
 */
@@ -17,7 +17,7 @@ import (
 	"unsafe"
 )
 
-// Version proves that the dynamically packaged native library is callable
+// Version proves that the statically linked native library is callable
 // before training/inference bindings are enabled.
 func Version() (string, error) {
 	var major, minor, patch C.int

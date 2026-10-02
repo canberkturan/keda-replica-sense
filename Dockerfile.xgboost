@@ -1,11 +1,10 @@
-# Build image for the optional native XGBoost trainer/forecaster engine.
-# It is separate from the default static image because libxgboost is a dynamic
-# C++ library and must travel with the process that links to it.
-FROM golang:1.26.6-bookworm AS xgboost
+# Build the optional native XGBoost trainer/forecaster engine as one static
+# executable. A scratch final image contains no OS packages to scan or patch.
+FROM golang:1.26.6-bookworm AS xgboost-source
 ARG XGBOOST_VERSION=v2.1.4
 ARG DMLC_CORE_COMMIT=13341857549852a9a86b1894b5ba84c6276ab381
 ARG GPUTREESHAP_COMMIT=787259b412c18ab8d5f24bf2b8bd6a59ff8208f3
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates cmake curl g++ make tar && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates cmake curl g++ make ninja-build tar && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL "https://github.com/dmlc/xgboost/archive/refs/tags/${XGBOOST_VERSION}.tar.gz" -o /tmp/xgboost.tar.gz \
     && mkdir -p /src/xgboost \
     && tar -xzf /tmp/xgboost.tar.gz --strip-components=1 -C /src/xgboost \
@@ -14,10 +13,28 @@ RUN curl -fsSL "https://github.com/dmlc/xgboost/archive/refs/tags/${XGBOOST_VERS
     && tar -xzf /tmp/dmlc-core.tar.gz --strip-components=1 -C /src/xgboost/dmlc-core \
     && curl -fsSL "https://github.com/rapidsai/gputreeshap/archive/${GPUTREESHAP_COMMIT}.tar.gz" -o /tmp/gputreeshap.tar.gz \
     && tar -xzf /tmp/gputreeshap.tar.gz --strip-components=1 -C /src/xgboost/gputreeshap \
-    && cmake -S /src/xgboost -B /src/xgboost/build -DBUILD_SHARED_LIBS=ON -DUSE_OPENMP=OFF -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-    && cmake --build /src/xgboost/build -j2 \
-    && cmake --install /src/xgboost/build --prefix /opt/xgboost \
-    && ln -sf libdmlc.so.0.3 /opt/xgboost/lib/libdmlc.so.0
+    && cmake -G Ninja -S /src/xgboost -B /src/xgboost/build -DBUILD_STATIC_LIB=ON -DUSE_OPENMP=OFF
+
+# Build independent XGBoost objects in named builder-only stages. This
+# bounds CI work while preserving the same Release compiler flags.
+FROM xgboost-source AS xgboost-objects-1
+RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | head -n 35)
+
+FROM xgboost-objects-1 AS xgboost-objects-2
+RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | sed -n '36,55p')
+
+FROM xgboost-objects-2 AS xgboost-objects-3
+RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | sed -n '56,70p')
+
+FROM xgboost-objects-3 AS xgboost-objects-4
+RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | tail -n +71 | head -n 10)
+
+FROM xgboost-objects-4 AS xgboost-objects-5
+RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | tail -n +81)
+
+FROM xgboost-objects-5 AS xgboost
+RUN cmake --build /src/xgboost/build -j20 \
+    && cmake --install /src/xgboost/build --prefix /opt/xgboost
 
 FROM golang:1.26.6-bookworm AS build
 ARG COMMAND
@@ -26,19 +43,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=xgboost /opt/xgboost /opt/xgboost
-ENV CGO_ENABLED=1 CGO_CFLAGS=-I/opt/xgboost/include CGO_LDFLAGS="-L/opt/xgboost/lib -Wl,-rpath-link,/opt/xgboost/lib -Wl,-rpath,/usr/local/lib"
-RUN LD_LIBRARY_PATH=/opt/xgboost/lib go test -tags xgboost ./...
-RUN go build -tags xgboost -buildvcs=false -trimpath -o /replicasense ./cmd/${COMMAND}
+ENV CGO_ENABLED=1 CGO_CFLAGS=-I/opt/xgboost/include CGO_LDFLAGS="-L/opt/xgboost/lib"
+RUN go test -tags xgboost ./...
+RUN go build -tags 'xgboost,netgo,osusergo' -buildvcs=false -trimpath \
+    -ldflags='-linkmode external -extldflags "-static"' \
+    -o /replicasense ./cmd/${COMMAND}
 
-# The XGBoost shared libraries require the C/C++ runtime, but do not require a
-# shell, package manager, or the broad Debian utility set. Distroless keeps the
-# final attack surface to those runtime libraries only.
-FROM gcr.io/distroless/cc-debian13:nonroot
-COPY --from=xgboost /opt/xgboost/lib/libxgboost.so /usr/local/lib/libxgboost.so
-COPY --from=xgboost /opt/xgboost/lib/libdmlc.so.0.3 /usr/local/lib/libdmlc.so.0.3
-# libxgboost links against the libdmlc.so.0 SONAME.  A Debian runtime created
-# this alias with ldconfig; copy the same shared object at that name because
-# the distroless image deliberately has no linker-cache management utility.
-COPY --from=xgboost /opt/xgboost/lib/libdmlc.so.0.3 /usr/local/lib/libdmlc.so.0
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /replicasense /replicasense
+USER 65532:65532
 ENTRYPOINT ["/replicasense"]
