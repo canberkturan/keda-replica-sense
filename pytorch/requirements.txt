@@ -5,3 +5,4 @@
 psycopg[binary]==3.3.6
 numpy==2.5.3
 torch==2.14.1+cpu
+tzdata==2026.4

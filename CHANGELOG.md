@@ -2,7 +2,18 @@
 
 This project follows semantic versioning. The notes below describe the
 production-facing changes introduced after `v0.2.6` and delivered through the
-`v0.3.7` release line.
+`v0.3.8` release line.
+
+## 0.3.8 — 2026-10-02
+
+- Replaced the CPU PyTorch GRU Trainer's Debian-based runtime with a minimal,
+  non-root Wolfi Python image. The Python packages and GRU training path pass a
+  build-time runtime smoke test before the image is published.
+- Added pinned time-zone data to preserve business-time features in the smaller
+  runtime, which does not contain the system time-zone database.
+- A local Trivy scan of the final GRU image reported no OS or Python package
+  vulnerabilities at the time of release preparation. Artifact Hub performs
+  its own scan after the image is published.
 
 ## 0.3.7 — 2026-10-02
 

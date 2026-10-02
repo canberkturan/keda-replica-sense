@@ -1,7 +1,10 @@
 # CPU-only PyTorch Trainer. The serving path remains Go and receives a
 # tensor-only JSON artifact, so this image is used exclusively by short-lived
 # Kubernetes Jobs.
-FROM python:3.13-slim-trixie AS build
+# Keep the build and runtime on the same Python/Wolfi ABI. The runtime image
+# contains no shell, package manager, or Debian Python package inventory.
+FROM cgr.dev/chainguard/python:latest-dev AS build
+USER root
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,15 +13,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp
 
 COPY pytorch/requirements.txt /tmp/requirements.txt
-RUN python -m pip install --no-cache-dir --upgrade pip==26.2.1
 RUN python -m pip install --no-cache-dir --target /opt/replicasense-python -r /tmp/requirements.txt
 COPY pytorch/gru_trainer.py /app/gru_trainer.py
 RUN python -m py_compile /app/gru_trainer.py
 
 # Keep only the interpreter, certificates, and installed runtime modules in the
-# published image. Distroless Debian is maintained independently and has no
-# package manager or shell available to an attacker.
-FROM gcr.io/distroless/python3-debian13:nonroot
+# published image. The Chainguard runtime is maintained separately from its
+# development image and defaults to a non-root user.
+FROM cgr.dev/chainguard/python:latest
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/opt/replicasense-python \
@@ -26,5 +28,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY --from=build /opt/replicasense-python /opt/replicasense-python
 COPY --from=build /app/gru_trainer.py /app/gru_trainer.py
-USER nonroot:nonroot
-ENTRYPOINT ["python", "/app/gru_trainer.py"]
+USER 65532:65532
+# Fail the image build before publication if a moving base image or wheel
+# changes the Python ABI or breaks the CPU-only GRU training path.
+RUN ["/usr/bin/python", "-c", "import numpy, psycopg, torch; from zoneinfo import ZoneInfo; from gru_trainer import QuantileGRU; ZoneInfo('Europe/Istanbul'); model = QuantileGRU(); model(torch.zeros(2, 120, 10)).sum().backward(); assert not torch.cuda.is_available()"]
+ENTRYPOINT ["/usr/bin/python", "/app/gru_trainer.py"]
