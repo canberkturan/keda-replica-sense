@@ -1,0 +1,21 @@
+name: Scan release image
+description: Reject release images with known vulnerabilities at any severity.
+inputs:
+  image:
+    description: Local Docker image to scan before publishing.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Scan OS and application dependencies
+      shell: bash
+      env:
+        SCAN_IMAGE: ${{ inputs.image }}
+      run: |
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa \
+          image --image-src docker --scanners vuln \
+          --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+          --ignore-unfixed=false --ignorefile /dev/null --exit-code 1 \
+          "$SCAN_IMAGE"

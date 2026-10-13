@@ -57,6 +57,17 @@ Release metadata is versioned. A release changes the chart version, image tags,
 and the matching Artifact Hub package directory together. Do not alter historic
 Artifact Hub package metadata after it has been published.
 
+Every release image is built and scanned before it is pushed to GHCR. The
+release gate checks all vulnerability severities, including unknown and
+currently unfixed findings. Fix the dependency or base image when the scan
+fails; do not suppress a finding to obtain a passing rating. A clean scan is
+specific to its image digest and the vulnerability database at that time.
+
+The GRU Dockerfile pins a matching Python builder and runtime by digest. When
+updating these snapshots, update both together, rebuild with `--pull`, and
+verify the CPU training and time-zone smoke test succeeds. Go security updates
+must be applied to `go.mod`, both Go Dockerfiles, and the CI toolchain.
+
 ## License
 
 By submitting a contribution, you agree to license it under Apache-2.0.

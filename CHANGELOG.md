@@ -2,7 +2,20 @@
 
 This project follows semantic versioning. The notes below describe the
 production-facing changes introduced after `v0.2.6` and delivered through the
-`v0.3.8` release line.
+`v0.3.9` release line.
+
+## 0.3.9 — 2026-10-13
+
+- Updated Go builds and CI to Go 1.26.9 and upgraded `golang.org/x/net` to
+  v0.60.0 with its required companion modules to address the reported Go CVEs.
+- Refreshed and digest-pinned the CPU PyTorch GRU Trainer's paired Wolfi Python
+  images, including glibc 2.44-r8 and the patched Python runtime.
+- Added a vulnerability scan before publishing every release image. The gate
+  checks OS and application packages at every severity, including unfixed
+  findings, and blocks image and Helm publication when a scan fails.
+- Rebuilt all nine release images and verified zero findings in the
+  2026-10-13 Trivy database before release preparation. Go race checks, native
+  XGBoost tests, and a non-root, read-only GRU training smoke test also pass.
 
 ## 0.3.8 — 2026-10-02
 

@@ -1,9 +1,10 @@
 # Build the optional native XGBoost trainer/forecaster engine as one static
 # executable. A scratch final image contains no OS packages to scan or patch.
-FROM golang:1.26.6-bookworm AS xgboost-source
+FROM golang:1.26.9-bookworm AS xgboost-source
 ARG XGBOOST_VERSION=v2.1.4
 ARG DMLC_CORE_COMMIT=13341857549852a9a86b1894b5ba84c6276ab381
 ARG GPUTREESHAP_COMMIT=787259b412c18ab8d5f24bf2b8bd6a59ff8208f3
+ARG XGBOOST_BUILD_JOBS=4
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates cmake curl g++ make ninja-build tar && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL "https://github.com/dmlc/xgboost/archive/refs/tags/${XGBOOST_VERSION}.tar.gz" -o /tmp/xgboost.tar.gz \
     && mkdir -p /src/xgboost \
@@ -14,30 +15,30 @@ RUN curl -fsSL "https://github.com/dmlc/xgboost/archive/refs/tags/${XGBOOST_VERS
     && curl -fsSL "https://github.com/rapidsai/gputreeshap/archive/${GPUTREESHAP_COMMIT}.tar.gz" -o /tmp/gputreeshap.tar.gz \
     && tar -xzf /tmp/gputreeshap.tar.gz --strip-components=1 -C /src/xgboost/gputreeshap \
     && cmake -G Ninja -S /src/xgboost -B /src/xgboost/build -DBUILD_STATIC_LIB=ON -DUSE_OPENMP=OFF
+ENV XGBOOST_BUILD_JOBS=${XGBOOST_BUILD_JOBS}
 
 # Build independent XGBoost objects in named builder-only stages. This
 # bounds CI work while preserving the same Release compiler flags.
 FROM xgboost-source AS xgboost-objects-1
-RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | head -n 35)
+RUN ninja -C /src/xgboost/build -j${XGBOOST_BUILD_JOBS} $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | head -n 35)
 
 FROM xgboost-objects-1 AS xgboost-objects-2
-RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | sed -n '36,55p')
+RUN ninja -C /src/xgboost/build -j${XGBOOST_BUILD_JOBS} $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | sed -n '36,55p')
 
 FROM xgboost-objects-2 AS xgboost-objects-3
-RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | sed -n '56,70p')
+RUN ninja -C /src/xgboost/build -j${XGBOOST_BUILD_JOBS} $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | sed -n '56,70p')
 
 FROM xgboost-objects-3 AS xgboost-objects-4
-RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | tail -n +71 | head -n 10)
+RUN ninja -C /src/xgboost/build -j${XGBOOST_BUILD_JOBS} $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | tail -n +71 | head -n 10)
 
 FROM xgboost-objects-4 AS xgboost-objects-5
-RUN ninja -C /src/xgboost/build -j20 $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | tail -n +81)
+RUN ninja -C /src/xgboost/build -j${XGBOOST_BUILD_JOBS} $(ninja -C /src/xgboost/build -t targets all | awk -F: '$1 ~ /objxgboost\.dir\/.*\.o$/{ print $1 }' | sort | tail -n +81)
 
 FROM xgboost-objects-5 AS xgboost
-RUN cmake --build /src/xgboost/build -j20 \
+RUN cmake --build /src/xgboost/build -j${XGBOOST_BUILD_JOBS} \
     && cmake --install /src/xgboost/build --prefix /opt/xgboost
 
-FROM golang:1.26.6-bookworm AS build
-ARG COMMAND
+FROM golang:1.26.9-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -45,6 +46,7 @@ COPY . .
 COPY --from=xgboost /opt/xgboost /opt/xgboost
 ENV CGO_ENABLED=1 CGO_CFLAGS=-I/opt/xgboost/include CGO_LDFLAGS="-L/opt/xgboost/lib"
 RUN go test -tags xgboost ./...
+ARG COMMAND
 RUN go build -tags 'xgboost,netgo,osusergo' -buildvcs=false -trimpath \
     -ldflags='-linkmode external -extldflags "-static"' \
     -o /replicasense ./cmd/${COMMAND}

@@ -1,0 +1,36 @@
+version: 0.3.9
+name: replica-sense
+alternativeName: keda-replica-sense
+category: ai-machine-learning
+displayName: ReplicaSense
+createdAt: "2026-10-13T00:00:00Z"
+description: KEDA external scaler for safe predictive autoscaling using Prometheus, XGBoost or GRU forecasts, and conservative surge protection.
+license: Apache-2.0
+homeURL: https://github.com/canberkturan/keda-replica-sense
+appVersion: 0.3.9
+keywords: [keda, keda-scaler, external-scaler, autoscaling, predictive-autoscaling, xgboost, gru, prometheus, ai-machine-learning]
+containersImages:
+  - {name: Controller, image: ghcr.io/canberkturan/replicasense-controller:0.3.9}
+  - {name: Sampler, image: ghcr.io/canberkturan/replicasense-sampler:0.3.9}
+  - {name: External scaler, image: ghcr.io/canberkturan/replicasense-scaler:0.3.9}
+  - {name: XGBoost and GRU forecaster, image: ghcr.io/canberkturan/replicasense-forecaster:0.3.9-xgboost}
+  - {name: XGBoost trainer, image: ghcr.io/canberkturan/replicasense-trainer:0.3.9-xgboost}
+  - {name: CPU PyTorch GRU trainer, image: ghcr.io/canberkturan/replicasense-trainer:0.3.9-pytorch-gru}
+  - {name: Training scheduler, image: ghcr.io/canberkturan/replicasense-training-scheduler:0.3.9}
+  - {name: Portable Go forecaster, image: ghcr.io/canberkturan/replicasense-forecaster:0.3.9}
+  - {name: Portable Go trainer, image: ghcr.io/canberkturan/replicasense-trainer:0.3.9}
+maintainers:
+  - {name: Canberk TURAN, email: canberkkturann@gmail.com}
+links:
+  - {name: Source, url: https://github.com/canberkturan/keda-replica-sense}
+  - {name: Documentation, url: https://github.com/canberkturan/keda-replica-sense/tree/main/docs}
+  - {name: Support, url: https://github.com/canberkturan/keda-replica-sense/issues}
+install: |
+  Install the ReplicaSense Helm chart, then add an external trigger to a KEDA ScaledObject.
+changes:
+  - kind: changed
+    description: Updated Go to 1.26.9 and golang.org/x/net to v0.60.0 to address the reported Go vulnerabilities.
+  - kind: changed
+    description: Refreshed and digest-pinned the patched Wolfi Python and glibc runtime used by CPU PyTorch GRU training Jobs.
+  - kind: added
+    description: Added an all-severity vulnerability scan before publishing every release image.

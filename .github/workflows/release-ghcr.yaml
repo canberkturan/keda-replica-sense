@@ -50,7 +50,21 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-      - uses: docker/build-push-action@v6
+      - name: Build image for security verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: COMMAND=replicasense-${{ matrix.component }}
+          pull: true
+          load: true
+          tags: replicasense-${{ matrix.component }}:release-check
+          provenance: false
+      - uses: ./.github/actions/scan-image
+        with:
+          image: replicasense-${{ matrix.component }}:release-check
+      - name: Publish verified image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
@@ -85,7 +99,21 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-      - uses: docker/build-push-action@v6
+      - name: Build native image for security verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.xgboost
+          build-args: COMMAND=replicasense-${{ matrix.component }}
+          pull: true
+          load: true
+          tags: replicasense-${{ matrix.component }}:xgboost-release-check
+          provenance: false
+      - uses: ./.github/actions/scan-image
+        with:
+          image: replicasense-${{ matrix.component }}:xgboost-release-check
+      - name: Publish verified native image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.xgboost
@@ -116,7 +144,20 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-      - uses: docker/build-push-action@v6
+      - name: Build GRU image for security verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.pytorch-gru
+          pull: true
+          load: true
+          tags: replicasense-trainer:pytorch-gru-release-check
+          provenance: false
+      - uses: ./.github/actions/scan-image
+        with:
+          image: replicasense-trainer:pytorch-gru-release-check
+      - name: Publish verified GRU image
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.pytorch-gru
