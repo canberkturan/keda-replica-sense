@@ -201,6 +201,9 @@ func parseForecastConfig(trigger TriggerInput, options ParserOptions, add func(s
 	if samplingInterval%time.Second != 0 {
 		add("metadata.samplingInterval", "must be an exact number of seconds")
 	}
+	if samplingInterval > 0 && trainingWindow%samplingInterval != 0 {
+		add("metadata.trainingWindow", "must be a whole number of sampling intervals")
+	}
 	decisionHorizon := horizon + startupLatency + safetyBuffer
 	if samplingInterval <= 0 || decisionHorizon <= 0 || decisionHorizon%samplingInterval != 0 {
 		add("metadata.forecastHorizon", "plus startupLatency and safetyBuffer must be a positive multiple of samplingInterval")

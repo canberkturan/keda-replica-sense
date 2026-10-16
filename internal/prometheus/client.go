@@ -1,5 +1,5 @@
-// Package prometheus implements the narrow Prometheus HTTP API used only by
-// the ReplicaSense sampler.
+// Package prometheus implements the narrow HTTP API shared by the ReplicaSense
+// sampler and trainer history preparation.
 package prometheus
 
 import (

@@ -79,7 +79,7 @@ spec:
             - name: REPLICASENSE_TRAINER_DATABASE_SECRET_KEY
               value: {{ $root.Values.database.urlKey | quote }}
             - name: REPLICASENSE_TRAINER_IMAGE_PULL_POLICY
-              value: {{ $root.Values.imagePullPolicy | quote }}
+              value: {{ default $root.Values.imagePullPolicy $root.Values.trainer.imagePullPolicy | quote }}
             - name: REPLICASENSE_TRAINER_REQUEST_CPU
               value: {{ $root.Values.trainer.resources.requests.cpu | quote }}
             - name: REPLICASENSE_TRAINER_REQUEST_MEMORY

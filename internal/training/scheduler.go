@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/fnv"
-	"math"
 	"time"
 
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
@@ -71,17 +70,10 @@ type JobCreator interface {
 // concurrent schedulers harmless without a second distributed lock service.
 type Scheduler struct {
 	Workloads        WorkloadLister
-	History          HistoryChecker
 	Claims           ClaimStore
 	Jobs             JobCreator
 	ClusterID        string
 	TrainingInterval time.Duration
-}
-
-// HistoryChecker confirms that the sampler has materialized a complete enough
-// training window before a one-time immediate Job is claimed.
-type HistoryChecker interface {
-	GetSampleCoverage(context.Context, workloadstore.SamplingWorkload, time.Time, time.Time) (workloadstore.SampleCoverage, error)
 }
 
 func (s Scheduler) RunOnce(ctx context.Context, now time.Time) error {
@@ -101,13 +93,6 @@ func (s Scheduler) RunOnce(ctx context.Context, now time.Time) error {
 		if workload.Spec.Forecast.ImmediateTraining {
 			end := now.UTC().Truncate(workload.Spec.Forecast.SamplingInterval)
 			start := end.Add(-workload.Spec.Forecast.TrainingWindow)
-			ready, err := s.immediateHistoryReady(ctx, workload, start, end)
-			if err != nil {
-				return fmt.Errorf("check immediate training history for %s: %w", workload.ID, err)
-			}
-			if !ready {
-				continue
-			}
 			claim := Claim{ClusterID: s.ClusterID, WorkloadID: workload.ID, Slot: immediateSlot(workload.Spec.PolicyRevision), Engine: workload.Spec.Forecast.ModelEngine, TrainingWindowFrom: start, TrainingWindowTo: end}
 			run, ready, err := s.Claims.ClaimImmediate(ctx, claim)
 			if err != nil {
@@ -141,39 +126,6 @@ func (s Scheduler) RunOnce(ctx context.Context, now time.Time) error {
 		}
 	}
 	return nil
-}
-
-func (s Scheduler) immediateHistoryReady(ctx context.Context, workload workloadstore.SamplingWorkload, start, end time.Time) (bool, error) {
-	if s.History == nil {
-		return false, fmt.Errorf("scheduler requires history checker for immediate training")
-	}
-	coverage, err := s.History.GetSampleCoverage(ctx, workload, start, end)
-	if err != nil {
-		return false, err
-	}
-	return hasSufficientHistory(coverage, start, end, workload.Spec.Forecast.SamplingInterval), nil
-}
-
-func hasSufficientHistory(coverage workloadstore.SampleCoverage, start, end time.Time, interval time.Duration) bool {
-	if coverage.Count == 0 || interval <= 0 || end.Before(start) {
-		return false
-	}
-	expected := int64(end.Sub(start) / interval)
-	// Prometheus queries are not a clock. At high sampling rates, a small
-	// number of scrape-alignment or scheduler-jitter gaps is normal; requiring
-	// every slot would keep an otherwise complete immediate-training window
-	// permanently pending. Keep a strong 99.8% coverage requirement, while the
-	// endpoint checks below still reject a stale or truncated history.
-	minimumCount := int64(math.Ceil(float64(expected) * 0.998))
-	// Preserve the two-sample allowance for short windows; for long windows,
-	// the percentage limit is the more realistic and still conservative guard.
-	if strictMinimum := expected - 2; strictMinimum < minimumCount {
-		minimumCount = strictMinimum
-	}
-	if minimumCount < 1 {
-		minimumCount = 1
-	}
-	return coverage.Count >= minimumCount && !coverage.OldestObservedAt.After(start.Add(interval)) && !coverage.NewestObservedAt.Before(end.Add(-2*interval))
 }
 
 // immediateSlot makes a policy revision a durable, idempotent claim key in a

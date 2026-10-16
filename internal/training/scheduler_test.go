@@ -35,8 +35,7 @@ func TestSchedulerClaimsImmediateTrainingOncePerPolicyRevision(t *testing.T) {
 	store := &fakeClaims{}
 	jobs := &fakeJobs{}
 	w := workloadstore.SamplingWorkload{ID: "workload-a", Spec: domain.WorkloadSpec{PolicyRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Forecast: domain.ForecastConfig{ImmediateTraining: true, TrainingWindow: 7 * 24 * time.Hour, SamplingInterval: time.Hour, ModelEngine: "xgboost"}}}
-	history := &fakeHistory{coverage: sufficientCoverage(now, w.Spec.Forecast.TrainingWindow, w.Spec.Forecast.SamplingInterval)}
-	s := Scheduler{Workloads: fakeWorkloads{items: []workloadstore.SamplingWorkload{w}}, History: history, Claims: store, Jobs: jobs, ClusterID: "cluster-a", TrainingInterval: 24 * time.Hour}
+	s := Scheduler{Workloads: fakeWorkloads{items: []workloadstore.SamplingWorkload{w}}, Claims: store, Jobs: jobs, ClusterID: "cluster-a", TrainingInterval: 24 * time.Hour}
 	if err := s.RunOnce(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
@@ -52,40 +51,17 @@ func TestSchedulerClaimsImmediateTrainingOncePerPolicyRevision(t *testing.T) {
 	}
 }
 
-func TestSchedulerWaitsForImmediateTrainingHistory(t *testing.T) {
+func TestSchedulerStartsImmediateTrainingWithoutCachedHistory(t *testing.T) {
 	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
 	store := &fakeClaims{}
 	jobs := &fakeJobs{}
 	w := workloadstore.SamplingWorkload{ID: "workload-a", Spec: domain.WorkloadSpec{PolicyRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Forecast: domain.ForecastConfig{ImmediateTraining: true, TrainingWindow: 24 * time.Hour, SamplingInterval: time.Hour, ModelEngine: "xgboost"}}}
-	history := &fakeHistory{}
-	s := Scheduler{Workloads: fakeWorkloads{items: []workloadstore.SamplingWorkload{w}}, History: history, Claims: store, Jobs: jobs, ClusterID: "cluster-a", TrainingInterval: 24 * time.Hour}
-	if err := s.RunOnce(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.immediate) != 0 || len(jobs.jobs) != 0 {
-		t.Fatalf("immediate run was claimed before history was available: claims=%#v jobs=%#v", store.immediate, jobs.jobs)
-	}
-	history.coverage = sufficientCoverage(now, w.Spec.Forecast.TrainingWindow, w.Spec.Forecast.SamplingInterval)
+	s := Scheduler{Workloads: fakeWorkloads{items: []workloadstore.SamplingWorkload{w}}, Claims: store, Jobs: jobs, ClusterID: "cluster-a", TrainingInterval: 24 * time.Hour}
 	if err := s.RunOnce(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.immediate) != 1 || len(jobs.jobs) != 1 {
-		t.Fatalf("immediate run did not start after history became available: claims=%#v jobs=%#v", store.immediate, jobs.jobs)
-	}
-}
-
-func TestImmediateTrainingAcceptsNearCompleteHighFrequencyHistory(t *testing.T) {
-	start := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
-	end := start.Add(12 * time.Hour)
-	coverage := workloadstore.SampleCoverage{
-		OldestObservedAt: start,
-		NewestObservedAt: end,
-		// 43,149 of 43,200 samples is 99.88% coverage: a realistic result
-		// for a one-second Prometheus-backed laboratory stream.
-		Count: 43149,
-	}
-	if !hasSufficientHistory(coverage, start, end, time.Second) {
-		t.Fatal("near-complete high-frequency history should be trainable")
+		t.Fatalf("trainer must start to repair missing history: claims=%#v jobs=%#v", store.immediate, jobs.jobs)
 	}
 }
 
@@ -95,18 +71,6 @@ type fakeWorkloads struct {
 
 func (f fakeWorkloads) ListActiveForCluster(context.Context, string) ([]workloadstore.SamplingWorkload, error) {
 	return f.items, nil
-}
-
-type fakeHistory struct{ coverage workloadstore.SampleCoverage }
-
-func (f *fakeHistory) GetSampleCoverage(context.Context, workloadstore.SamplingWorkload, time.Time, time.Time) (workloadstore.SampleCoverage, error) {
-	return f.coverage, nil
-}
-
-func sufficientCoverage(now time.Time, window, interval time.Duration) workloadstore.SampleCoverage {
-	end := now.UTC().Truncate(interval)
-	start := end.Add(-window)
-	return workloadstore.SampleCoverage{OldestObservedAt: start, NewestObservedAt: end, Count: int64(window / interval)}
 }
 
 type fakeClaims struct {

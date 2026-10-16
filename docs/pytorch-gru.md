@@ -36,19 +36,25 @@ Kubernetes API token.
 The trainer creates two one-layer GRUs: a P50 head and the configured upper
 quantile head. Each input has 120 one-minute observations and the same demand,
 clock, weekday, day-of-month, month, and weekend features used by ReplicaSense.
-It uses a contiguous train/calibration/test split; the test segment is not used
-for fitting or conformal calibration. Promotion requires:
+It uses a contiguous train/calibration/test split. Normalization is fitted on
+training observations only; held-out data never fits either the weights or the
+conformal correction. The image's shared Go preflight repairs missing PostgreSQL
+slots from the original Prometheus query before Python loads samples. If source
+retention or availability leaves gaps unresolved, training fails explicitly
+instead of joining the outage or selecting an older fragment.
 
-- coverage at least 93%;
-- underprediction at most 7%; and
-- no worse P95 pinball loss than the active champion or deterministic baseline.
+The Job always publishes a candidate, never an active model. Python holdout
+scores are diagnostics, not promotion authority. The shared Go evaluator loads
+the exported JSON tensors and compares their actual serving predictions with
+the active artifact and baseline on identical held-out observations. See
+[model promotion](model-promotion.md) for quantile-aware gates, shadow mode,
+and rollback. A rejected candidate does not replace an existing active model.
 
-Failed criteria leave the artifact as a candidate. KEDA continues to use the
-reactive trigger, so an unpromoted GRU cannot take control of replica count.
-
-The Job prints one structured completion record containing its promotion result
-and validation rates. Full metrics are stored with the `training_runs` and
-`models` records and are available to ReplicaSense monitoring queries.
+The Job prints a structured completion record with
+`promotion_reason=awaiting_shared_artifact_evaluation`. Training success does
+not mean promotion. The shared evaluation evidence and decision are stored in
+`models.validation_metrics.promotion_v2`; trainer diagnostics stay with the
+training run and model.
 
 ## Resource planning
 

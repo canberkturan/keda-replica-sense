@@ -3,12 +3,14 @@ package kube
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/canberkturan/keda-replica-sense/internal/history"
 	"github.com/canberkturan/keda-replica-sense/internal/training"
 )
 
@@ -82,5 +84,28 @@ func TestTrainingJobCreatorUsesEngineSpecificImageAndWritableTmp(t *testing.T) {
 	}
 	if len(container.VolumeMounts) != 1 || container.VolumeMounts[0].MountPath != "/tmp" || len(job.Spec.Template.Spec.Volumes) != 1 || job.Spec.Template.Spec.Volumes[0].EmptyDir == nil {
 		t.Fatalf("trainer must have an EmptyDir /tmp: %#v", job.Spec.Template.Spec)
+	}
+}
+
+func TestTrainingJobsForwardValidatedHistoryRepairBudgets(t *testing.T) {
+	client := fake.NewClientset()
+	creator := TrainingJobCreator{Client: client, Namespace: "test", Image: "trainer", DatabaseSecretName: "database", DatabaseSecretKey: "url", HistoryRepairPolicy: history.Policy{Timeout: time.Minute, QueryTimeout: 7 * time.Second, MaxPoints: 100000}}
+	if err := creator.Create(context.Background(), training.Job{RunID: "history", PolicyRevision: "revision"}); err != nil {
+		t.Fatal(err)
+	}
+	job, err := client.BatchV1().Jobs("test").Get(context.Background(), "replicasense-trainer-history", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	for _, item := range job.Spec.Template.Spec.Containers[0].Env {
+		env[item.Name] = item.Value
+	}
+	if env["REPLICASENSE_TRAINER_HISTORY_REPAIR_TIMEOUT"] != "1m0s" || env["REPLICASENSE_TRAINER_HISTORY_QUERY_TIMEOUT"] != "7s" || env["REPLICASENSE_TRAINER_HISTORY_MAX_POINTS"] != "100000" {
+		t.Fatal("history repair budgets not propagated", env)
+	}
+	creator.HistoryRepairPolicy.MaxPoints = -1
+	if err := creator.Create(context.Background(), training.Job{RunID: "unsafe", PolicyRevision: "revision"}); err == nil {
+		t.Fatal("invalid repair budgets accepted")
 	}
 }

@@ -101,6 +101,18 @@ components:
       REPLICASENSE_SEASONAL_PERIOD: 24h
       REPLICASENSE_FORECAST_INTERVAL: 1m
       REPLICASENSE_MODEL_MAX_AGE: 72h
+      # Training creates candidates only. A separate serial worker compares
+      # exact Go/PyTorch artifacts on the same fully observed holdout windows.
+      REPLICASENSE_MODEL_PROMOTION_MODE: automatic
+      REPLICASENSE_MODEL_EVALUATION_INTERVAL: 5m
+      REPLICASENSE_MODEL_EVALUATION_WINDOW: 48h
+      REPLICASENSE_MODEL_EVALUATION_MIN_DURATION: 24h
+      REPLICASENSE_MODEL_EVALUATION_MIN_WINDOWS: "72"
+      REPLICASENSE_MODEL_EVALUATION_MAX_WINDOWS: "288"
+      REPLICASENSE_MODEL_COVERAGE_TOLERANCE: "0.03"
+      REPLICASENSE_MODEL_MIN_IMPROVEMENT: "0.03"
+      REPLICASENSE_MODEL_MAX_RELATIVE_UNDERPREDICTION: "0.5"
+      REPLICASENSE_MODEL_ROLLBACK_ENABLED: "false"
       # Estimates are disposable inference inputs, never observations/training
       # data. Longer or unreliable interruptions continue to fail closed.
       REPLICASENSE_SHORT_GAP_INTERPOLATION_ENABLED: "true"
@@ -122,6 +134,11 @@ components:
     env:
       REPLICASENSE_TRAINER_IMAGE: ghcr.io/canberkturan/replicasense-trainer:0.4.0-xgboost
       REPLICASENSE_TRAINING_INTERVAL: 24h
+      # Passed to all native and CPU GRU Trainer Jobs. Repairs use the original
+      # PromQL query and never interpolate or overwrite existing observations.
+      REPLICASENSE_TRAINER_HISTORY_REPAIR_TIMEOUT: 2m
+      REPLICASENSE_TRAINER_HISTORY_QUERY_TIMEOUT: 15s
+      REPLICASENSE_TRAINER_HISTORY_MAX_POINTS: "1000000"
       # Scheduling cadence and loop polling are intentionally separate: the
       # latter makes immediateTraining responsive without creating daily Jobs.
       REPLICASENSE_TRAINING_POLL_INTERVAL: 1m
@@ -131,6 +148,9 @@ components:
       REPLICASENSE_TRAINER_MAX_GAP_INTERVALS: "2"
 
 trainer:
+  # Empty inherits the global policy; local/mirrored training images may
+  # override independently of the always-on components.
+  imagePullPolicy: ""
   images:
     # Only modelEngine: gru Jobs use this CPU-only image. Override it when
     # mirroring ReplicaSense images into a private enterprise registry; all

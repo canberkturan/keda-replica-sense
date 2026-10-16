@@ -10,6 +10,7 @@ import json
 import math
 import os
 import sys
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -68,6 +69,42 @@ def pinball(prediction, target, quantile):
 def normalizer(values):
     low, high = min(values), max(values)
     return low, max(high - low, 1.0)
+
+
+def prepare_history(end):
+    # The helper uses the same Go repair code as native trainers. No shell or
+    # credentials on argv; its own context bounds database and HTTP work.
+    repair_env = dict(os.environ, REPLICASENSE_HISTORY_END=end.isoformat())
+    repaired = subprocess.run(["/replicasense-history"], env=repair_env, capture_output=True, text=True, check=False)
+    if repaired.returncode != 0:
+        raise RuntimeError(repaired.stderr.strip() or "training history repair failed")
+    report = json.loads(repaired.stdout)
+    print(json.dumps({"event": "training_history_prepared", **report}, separators=(",", ":")), flush=True)
+    return report
+
+
+def training_segment(samples, sampling_seconds, minimum):
+    points = []
+    for timestamp, value in samples:
+        if not math.isfinite(value) or value < 0:
+            raise RuntimeError("invalid training observation")
+        slot = int(timestamp.timestamp()) // sampling_seconds
+        if points and timestamp <= points[-1][0]:
+            raise RuntimeError("unordered training observations")
+        if points and int(points[-1][0].timestamp()) // sampling_seconds == slot:
+            points[-1] = (timestamp, value)
+        else:
+            points.append((timestamp, value))
+    selected, start = [], 0
+    for i in range(1, len(points) + 1):
+        if i < len(points) and int(points[i][0].timestamp()) // sampling_seconds - int(points[i - 1][0].timestamp()) // sampling_seconds == 1:
+            continue
+        if i - start >= minimum:
+            selected = points[start:i]
+        start = i
+    if not selected:
+        raise RuntimeError("insufficient contiguous real training history")
+    return selected
 
 
 def feature(timestamp, value, minimum, scale, location):
@@ -131,11 +168,21 @@ def residual_quantile(model, samples, indexes, steps, minimum, scale, location, 
     return residuals[min(len(residuals) - 1, math.ceil(quantile * len(residuals)) - 1)]
 
 
+def temporal_partitions(samples, steps):
+    train_end = int(len(samples) * 0.80) - steps - 1
+    calibration_end = int(len(samples) * 0.90) - steps - 1
+    if train_end < SEQUENCE or calibration_end <= train_end + steps:
+        raise RuntimeError("insufficient temporal partitions")
+    # Training labels extend steps past their origins. Normalization may use
+    # that training prefix, but never calibration or held-out observations.
+    minimum, scale = normalizer([value for _, value in samples[:train_end + steps + 1]])
+    return train_end, calibration_end, minimum, scale
+
+
 def validation(samples, steps, sampling_seconds, minimum, scale, location, quantile):
     # Train / calibration / test are contiguous temporal partitions. The test
     # period is never used for fitting or conformal residual calibration.
-    train_end = int(len(samples) * 0.80) - steps - 1
-    calibration_end = int(len(samples) * 0.90) - steps - 1
+    train_end, calibration_end, _, _ = temporal_partitions(samples, steps)
     p50_features, p50_targets, _ = make_examples(samples, steps, minimum, scale, location, train_end)
     p95_features, p95_targets, _ = make_examples(samples, steps, minimum, scale, location, train_end)
     p50 = fit(p50_features, p50_targets, 0.50, 20260920)
@@ -178,24 +225,6 @@ def tensor_data(model):
     }
 
 
-def active_validation(cursor, contract):
-    cursor.execute("SELECT validation_metrics->'walk_forward' AS validation FROM models WHERE cluster_id=%s AND workload_id=%s AND source_fingerprint=%s AND status='active'", (contract.cluster_id, contract.workload_id, contract.source_fingerprint))
-    row = cursor.fetchone()
-    return row["validation"] if row else None
-
-
-def promote(candidate, reference):
-    if candidate["coverage"] < 0.93:
-        return False, f"coverage_below_minimum: {candidate['coverage']:.4f} < 0.9300", ""
-    if candidate["underprediction_rate"] > 0.07:
-        return False, f"underprediction_above_maximum: {candidate['underprediction_rate']:.4f} > 0.0700", ""
-    name = "active_champion" if reference else "deterministic_baseline"
-    reference = reference or candidate["deterministic_baseline"]
-    if candidate["underprediction_rate"] > reference["underprediction_rate"] or candidate["pinball_loss_p95"] > reference["pinball_loss_p95"] or (candidate["pinball_loss_p95"] == reference["pinball_loss_p95"] and candidate["mean_absolute_error"] > reference["mean_absolute_error"]):
-        return False, f"not_better_than_{name}", name
-    return True, "promotion_policy_satisfied", name
-
-
 def main():
     contract = Contract(require("REPLICASENSE_CLUSTER_ID"), require("REPLICASENSE_WORKLOAD_ID"), require("REPLICASENSE_TRAINING_RUN_ID"), require("REPLICASENSE_POLICY_REVISION"), "", 0, 0, 0, 0, "")
     if os.getenv("REPLICASENSE_MODEL_ENGINE", "gru") != "gru":
@@ -208,15 +237,19 @@ def main():
             workload = cursor.fetchone()
             if not workload or workload["policy_revision"] != contract.policy_revision:
                 raise RuntimeError("workload is inactive or its policy revision changed")
-            contract.source_fingerprint, contract.horizon_seconds, contract.sampling_seconds, contract.training_window_seconds, contract.quantile, contract.timezone_name = workload["source_fingerprint"], workload["forecast_horizon_seconds"], workload["sampling_interval_seconds"], workload["training_window_seconds"], float(workload["forecast_quantile"]), workload["business_timezone"]
-            end = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            cursor.execute("SELECT startup_latency_seconds + safety_buffer_seconds AS extra FROM workloads WHERE id=%s", (contract.workload_id,))
+            extra = cursor.fetchone()["extra"]
+            contract.source_fingerprint, contract.horizon_seconds, contract.sampling_seconds, contract.training_window_seconds, contract.quantile, contract.timezone_name = workload["source_fingerprint"], workload["forecast_horizon_seconds"] + extra, workload["sampling_interval_seconds"], workload["training_window_seconds"], float(workload["forecast_quantile"]), workload["business_timezone"]
+            end = datetime.fromtimestamp(int(datetime.now(timezone.utc).timestamp()) // contract.sampling_seconds * contract.sampling_seconds, tz=timezone.utc)
             start = end - timedelta(seconds=contract.training_window_seconds)
-            cursor.execute("SELECT observed_at, observed_value FROM samples WHERE cluster_id=%s AND workload_id=%s AND source_fingerprint=%s AND observed_at >= %s AND observed_at <= %s ORDER BY observed_at", (contract.cluster_id, contract.workload_id, contract.source_fingerprint, start, end))
+            history_report = prepare_history(end)
+            cursor.execute("SELECT observed_at, observed_value FROM samples WHERE cluster_id=%s AND workload_id=%s AND source_fingerprint=%s AND observed_at >= %s AND observed_at < %s ORDER BY observed_at", (contract.cluster_id, contract.workload_id, contract.source_fingerprint, start, end))
             samples = [(row["observed_at"], float(row["observed_value"])) for row in cursor.fetchall()]
             steps = contract.horizon_seconds // contract.sampling_seconds
             seasonal_seconds = int(os.getenv("REPLICASENSE_SEASONAL_PERIOD_SECONDS", "86400"))
             if seasonal_seconds <= 0:
                 raise RuntimeError("REPLICASENSE_SEASONAL_PERIOD_SECONDS must be positive")
+            samples = training_segment(samples, contract.sampling_seconds, max(SEQUENCE + steps + 288, seasonal_seconds // contract.sampling_seconds * 5 // 4))
             if steps < 1 or len(samples) < max(SEQUENCE + steps + 288, seasonal_seconds // contract.sampling_seconds):
                 raise RuntimeError("insufficient samples for PyTorch GRU training")
             max_gap_intervals = int(os.getenv("REPLICASENSE_MAX_GAP_INTERVALS", "2"))
@@ -226,26 +259,23 @@ def main():
                 if (current[0] - previous[0]).total_seconds() > contract.sampling_seconds * max_gap_intervals:
                     raise RuntimeError(f"training data has a gap larger than {max_gap_intervals} sampling intervals")
             location = ZoneInfo(contract.timezone_name)
-            values = [value for _, value in samples]
-            minimum, scale = normalizer(values)
+            _, calibration_end, minimum, scale = temporal_partitions(samples, steps)
             walk_forward, baseline, p50, p95, offset = validation(samples, steps, contract.sampling_seconds, minimum, scale, location, contract.quantile)
             # Store exactly the models and conformal adjustment that completed
             # the temporal holdout. The test period was never used to fit or
             # calibrate either output head.
             artifact = {"engine": "gru", "format": FORMAT, "feature_schema": FEATURE_SCHEMA, "upper_quantile": contract.quantile, "sequence_length": SEQUENCE, "input_size": INPUTS, "hidden_size": HIDDEN, "value_minimum": minimum, "value_scale": scale, "p95_calibration": offset, "p50": tensor_data(p50), "p95": tensor_data(p95)}
-            champion = active_validation(cursor, contract)
-            candidate = dict(walk_forward)
-            candidate["deterministic_baseline"] = baseline
-            accepted, reason, reference = promote(candidate, champion)
-            metrics = {"sample_count": len(samples), "baseline": False, "operational_quantile": contract.quantile, "walk_forward": walk_forward, "deterministic_baseline": baseline, "promotion": {"promote": accepted, "reason": reason, "reference": reference}, "trainer": {"implementation": "pytorch-cpu", "torch_version": torch.__version__, "sequence_length": SEQUENCE, "hidden_size": HIDDEN}}
+            # Local scores are diagnostics only. Go evaluates the exported
+            # artifact against the champion on identical real holdout windows.
+            accepted, reason = False, "awaiting_shared_artifact_evaluation"
+            metrics = {"sample_count": len(samples), "history_repair": history_report, "baseline": False, "operational_quantile": contract.quantile, "trainer_diagnostics": walk_forward, "deterministic_baseline_diagnostics": baseline, "promotion": {"promote": False, "reason": reason}, "trainer": {"implementation": "pytorch-cpu", "torch_version": torch.__version__, "sequence_length": SEQUENCE, "hidden_size": HIDDEN}}
+            evaluation_contract = {"version": "artifact-comparison-v1", "policy_revision": contract.policy_revision, "horizon_seconds": contract.horizon_seconds, "sampling_seconds": contract.sampling_seconds, "seasonal_seconds": seasonal_seconds, "quantile": contract.quantile, "timezone": contract.timezone_name}
             encoded = json.dumps(artifact, separators=(",", ":")).encode()
             digest = hashlib.sha256(encoded).hexdigest()
-            data_digest = hashlib.sha256("".join(f"{point.isoformat()}:{value}\n" for point, value in samples).encode()).hexdigest()
-            cursor.execute("INSERT INTO models (cluster_id, workload_id, source_fingerprint, engine, engine_version, feature_schema_version, training_window_start, training_window_end, dataset_fingerprint, hyperparameters, validation_metrics, artifact_data, artifact_sha256, status) VALUES (%s,%s,%s,'gru','pytorch-cpu',%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,'candidate') RETURNING id", (contract.cluster_id, contract.workload_id, contract.source_fingerprint, FEATURE_SCHEMA, start, end, data_digest, json.dumps({"epochs": EPOCHS, "hidden_size": HIDDEN, "sequence_length": SEQUENCE}), json.dumps(metrics), encoded, digest))
+            data_digest = hashlib.sha256("".join(f"{point.isoformat()}:{value}\n" for point, value in samples[:calibration_end + steps + 1]).encode()).hexdigest()
+            fitted_end = samples[calibration_end + steps][0]
+            cursor.execute("INSERT INTO models (cluster_id, workload_id, source_fingerprint, engine, engine_version, feature_schema_version, training_window_start, training_window_end, dataset_fingerprint, hyperparameters, validation_metrics, artifact_data, artifact_sha256, status) VALUES (%s,%s,%s,'gru','pytorch-cpu',%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s,'candidate') RETURNING id", (contract.cluster_id, contract.workload_id, contract.source_fingerprint, FEATURE_SCHEMA, samples[0][0], fitted_end, data_digest, json.dumps({"epochs": EPOCHS, "hidden_size": HIDDEN, "sequence_length": SEQUENCE, "evaluation_contract": evaluation_contract}), json.dumps(metrics), encoded, digest))
             model_id = cursor.fetchone()["id"]
-            if accepted:
-                cursor.execute("UPDATE models SET status='retired', retired_at=now() WHERE cluster_id=%s AND workload_id=%s AND source_fingerprint=%s AND status='active'", (contract.cluster_id, contract.workload_id, contract.source_fingerprint))
-                cursor.execute("UPDATE models SET status='active', activated_at=now() WHERE id=%s", (model_id,))
             cursor.execute("UPDATE training_runs SET status='succeeded', model_id=%s, dataset_size=%s, validation_metrics=%s::jsonb, finished_at=now() WHERE id=%s", (model_id, len(samples), json.dumps(metrics), contract.run_id))
         connection.commit()
     print(json.dumps({"event": "pytorch_gru_training_completed", "model_id": str(model_id), "promoted": accepted, "promotion_reason": reason, "validation_windows": walk_forward["windows"], "coverage": walk_forward["coverage"], "underprediction_rate": walk_forward["underprediction_rate"]}, separators=(",", ":")))

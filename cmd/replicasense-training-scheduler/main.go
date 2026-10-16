@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/canberkturan/keda-replica-sense/internal/history"
 	"github.com/canberkturan/keda-replica-sense/internal/kube"
 	"github.com/canberkturan/keda-replica-sense/internal/postgres"
 	"github.com/canberkturan/keda-replica-sense/internal/training"
@@ -66,9 +67,14 @@ func main() {
 		os.Exit(1)
 	}
 	samples := postgres.NewSampleRepository(pool)
+	repairPolicy, err := history.PolicyFromEnvironment(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	scheduler := training.Scheduler{
-		Workloads: samples, History: samples, Claims: postgres.NewTrainingRepository(pool),
-		Jobs:      kube.TrainingJobCreator{Client: client, Namespace: valueOrDefault("REPLICASENSE_SYSTEM_NAMESPACE", "replicasense-system"), Image: valueOrDefault("REPLICASENSE_TRAINER_IMAGE", "replicasense-trainer:latest"), EngineImages: map[string]string{"gru": os.Getenv("REPLICASENSE_TRAINER_IMAGE_GRU")}, ImagePullPolicy: corev1.PullPolicy(valueOrDefault("REPLICASENSE_TRAINER_IMAGE_PULL_POLICY", "IfNotPresent")), ServiceAccount: valueOrDefault("REPLICASENSE_TRAINER_SERVICE_ACCOUNT", "replicasense-trainer"), DatabaseSecretName: trainerDatabaseSecret, DatabaseSecretKey: valueOrDefault("REPLICASENSE_TRAINER_DATABASE_SECRET_KEY", "url"), Resources: resources, ActiveDeadlineSecs: activeDeadline, SeasonalPeriod: seasonalPeriod, MaxGapIntervals: int(maxGapIntervals)},
+		Workloads: samples, Claims: postgres.NewTrainingRepository(pool),
+		Jobs:      kube.TrainingJobCreator{Client: client, Namespace: valueOrDefault("REPLICASENSE_SYSTEM_NAMESPACE", "replicasense-system"), Image: valueOrDefault("REPLICASENSE_TRAINER_IMAGE", "replicasense-trainer:latest"), EngineImages: map[string]string{"gru": os.Getenv("REPLICASENSE_TRAINER_IMAGE_GRU")}, ImagePullPolicy: corev1.PullPolicy(valueOrDefault("REPLICASENSE_TRAINER_IMAGE_PULL_POLICY", "IfNotPresent")), ServiceAccount: valueOrDefault("REPLICASENSE_TRAINER_SERVICE_ACCOUNT", "replicasense-trainer"), DatabaseSecretName: trainerDatabaseSecret, DatabaseSecretKey: valueOrDefault("REPLICASENSE_TRAINER_DATABASE_SECRET_KEY", "url"), Resources: resources, ActiveDeadlineSecs: activeDeadline, SeasonalPeriod: seasonalPeriod, MaxGapIntervals: int(maxGapIntervals), HistoryRepairPolicy: repairPolicy},
 		ClusterID: cluster, TrainingInterval: durationOrDefault("REPLICASENSE_TRAINING_INTERVAL", 24*time.Hour),
 	}
 	for {

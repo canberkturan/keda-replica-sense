@@ -60,7 +60,9 @@ helm upgrade --install replicasense oci://ghcr.io/canberkturan/charts/replicasen
 The chart defaults to matching immutable release tags, with native XGBoost
 images for the forecaster and internally-created Trainer Jobs. A successful
 training run stores an immutable candidate; it is activated only after the
-promotion policy accepts its no-leakage validation results. Users do not create
+shared Go evaluator accepts its paired, held-out artifact comparison. See
+[model promotion](../../docs/model-promotion.md) for shadow mode, rollback and
+the `components.forecaster.env` settings. Users do not create
 or promote Jobs. If you mirror the chart to a private registry, authenticate
 with that registry before installation.
 

@@ -6,6 +6,33 @@ production-facing changes introduced after `v0.2.6` and delivered through the
 
 ## 0.4.0 — 2026-10-16
 
+### Security
+
+- Upgrade the KEDA dependency to 2.21.0 to fix CVE-2026-77524 and align the
+  Kubernetes libraries with that release. Existing clusters must also upgrade
+  their separately installed KEDA operator; rebuilding ReplicaSense alone
+  does not patch the operator.
+
+### Model training and promotion
+
+- Make native and CPU GRU trainers repair missing PostgreSQL sampling slots
+  directly from their configured Prometheus source before fitting. Repair is
+  bounded, insert-only, policy-fenced, and fails explicitly if source history
+  cannot fill a gap. Immediate Jobs no longer wait for cached history first.
+
+- Separate candidate training from model activation. A shared Go worker evaluates
+  exact native XGBoost and exported CPU GRU artifacts on identical complete real
+  holdout windows instead of comparing historical scores from different periods.
+- Fit GRU normalization on training data only; retain true fit/calibration
+  cutoffs and train on real contiguous segments without bridging source outages.
+- Add configurable quantile-aware coverage, underprediction severity and peak
+  gates, a meaningful loss-improvement margin, shadow mode, and opt-in
+  evidence-gated rollback. Preserve pending candidates across daily training.
+- Fence model switches by workload revision and active-model ID, retain bounded
+  evaluation audit history, and renew model validity only with fresh evidence.
+- Add evaluation metrics, an operations guide, and automated PostgreSQL
+  transaction and Python temporal-isolation checks.
+
 ### Restart recovery
 
 - Added a leader-elected controller check for predictive metrics missing from

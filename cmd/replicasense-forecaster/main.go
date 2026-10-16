@@ -16,6 +16,7 @@ import (
 	"github.com/canberkturan/keda-replica-sense/internal/observability"
 	"github.com/canberkturan/keda-replica-sense/internal/postgres"
 	"github.com/canberkturan/keda-replica-sense/internal/safety"
+	"github.com/canberkturan/keda-replica-sense/internal/training"
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -32,6 +33,11 @@ func main() {
 	period := durationEnv("REPLICASENSE_SEASONAL_PERIOD", 24*time.Hour)
 	interval := durationEnv("REPLICASENSE_FORECAST_INTERVAL", time.Minute)
 	minimum := intEnv("REPLICASENSE_FORECAST_MIN_SAMPLES", 0)
+	promotionPolicy, err := training.EvaluationPolicyFromEnvironment(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "model evaluation policy:", err)
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -60,6 +66,38 @@ func main() {
 	metricsRegistry := prometheus.NewRegistry()
 	metricsRegistry.MustRegister(prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	metrics := observability.NewForecasterMetrics(metricsRegistry)
+	evaluationMetrics := observability.NewModelEvaluationMetrics(metricsRegistry)
+	modelEvaluation := training.EvaluationService{Store: postgres.NewModelRepository(pool), Samples: repo, Policy: promotionPolicy, SeasonalPeriod: period, OnDecision: func(w workloadstore.SamplingWorkload, r training.EvaluationReport) {
+		evaluationMetrics.Record(w, r)
+		fmt.Fprintf(os.Stderr, "model evaluation: scaled_object=%s/%s action=%s reason=%s windows=%d\n", w.Spec.Key.Namespace, w.Spec.Key.ScaledObjectName, r.Action, r.Reason, r.Evidence.EligibleWindows)
+	}}
+	// Bounded, serial background work keeps artifact comparisons off the
+	// latency-sensitive forecast path. Database locks coordinate replicas.
+	go func() {
+		poll := durationEnv("REPLICASENSE_MODEL_EVALUATION_INTERVAL", 5*time.Minute)
+		for {
+			items, err := repo.ListActiveForCluster(ctx, cluster)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "list model evaluation workloads:", err)
+			}
+			for _, w := range items {
+				workCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+				err := modelEvaluation.Evaluate(workCtx, w, time.Now())
+				cancel()
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "evaluate model artifacts:", err)
+				}
+				if ctx.Err() != nil {
+					return
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(poll):
+			}
+		}
+	}()
 	capacityGuard.Observer = func(snapshot kube.CapacitySnapshot) {
 		metrics.RecordCapacity(cluster, snapshot)
 	}

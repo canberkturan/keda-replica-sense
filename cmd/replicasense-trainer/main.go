@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/canberkturan/keda-replica-sense/internal/history"
 	"github.com/canberkturan/keda-replica-sense/internal/postgres"
+	promsource "github.com/canberkturan/keda-replica-sense/internal/prometheus"
 	"github.com/canberkturan/keda-replica-sense/internal/trainer"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -36,7 +38,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "REPLICASENSE_MAX_GAP_INTERVALS:", err)
 		os.Exit(1)
 	}
-	service := trainer.Service{Workloads: repository, Samples: repository, Runs: postgres.NewTrainingRepository(pool), Models: postgres.NewModelRepository(pool), ExpectedPolicyRevision: policyRevision, SeasonalPeriod: seasonalPeriod, MaxGapIntervals: maxGapIntervals}
+	repairPolicy, err := history.PolicyFromEnvironment(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	service := trainer.Service{Workloads: repository, Samples: repository, Runs: postgres.NewTrainingRepository(pool), Models: postgres.NewModelRepository(pool), ExpectedPolicyRevision: policyRevision, SeasonalPeriod: seasonalPeriod, MaxGapIntervals: maxGapIntervals, History: history.Repairer{Store: repository, Querier: promsource.Client{}, Policy: repairPolicy}}
 	if err := service.Run(ctx, cluster, workloadID, runID, os.Getenv("REPLICASENSE_MODEL_ENGINE"), time.Now()); err != nil {
 		fmt.Fprintln(os.Stderr, "train:", err)
 		os.Exit(1)

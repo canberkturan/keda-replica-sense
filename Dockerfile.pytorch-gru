@@ -3,6 +3,13 @@
 # Kubernetes Jobs.
 # Keep the build and runtime on the same Python/Wolfi ABI. Pin the paired
 # snapshots so cached or moving tags cannot restore vulnerable OS packages.
+FROM golang:1.26.9 AS history-build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /replicasense-history ./cmd/replicasense-history
+
 FROM cgr.dev/chainguard/python:latest-dev@sha256:e8e6a6f7677673d91c9b28fa2ec6ad62cd5ed532179846d2c14e75c93a12c3fc AS build
 USER root
 
@@ -28,8 +35,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY --from=build /opt/replicasense-python /opt/replicasense-python
 COPY --from=build /app/gru_trainer.py /app/gru_trainer.py
+COPY --from=history-build /replicasense-history /replicasense-history
 USER 65532:65532
 # Fail the image build before publication if a new base snapshot or wheel
 # changes the Python ABI or breaks the CPU-only GRU training path.
-RUN ["/usr/bin/python", "-c", "import numpy, psycopg, torch; from zoneinfo import ZoneInfo; from gru_trainer import QuantileGRU; ZoneInfo('Europe/Istanbul'); model = QuantileGRU(); model(torch.zeros(2, 120, 10)).sum().backward(); assert not torch.cuda.is_available()"]
+RUN ["/usr/bin/python", "-c", "import numpy, psycopg, torch, subprocess; from zoneinfo import ZoneInfo; from gru_trainer import QuantileGRU; ZoneInfo('Europe/Istanbul'); model = QuantileGRU(); model(torch.zeros(2, 120, 10)).sum().backward(); assert not torch.cuda.is_available(); result = subprocess.run(['/replicasense-history'], capture_output=True, text=True); assert result.returncode == 1 and 'history repair requires' in result.stderr"]
 ENTRYPOINT ["/usr/bin/python", "/app/gru_trainer.py"]

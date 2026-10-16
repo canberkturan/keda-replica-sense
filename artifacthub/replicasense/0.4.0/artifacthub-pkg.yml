@@ -28,6 +28,12 @@ links:
 install: |
   Install the ReplicaSense Helm chart, then add an external trigger to a KEDA ScaledObject.
 changes:
+  - kind: security
+    description: Upgrade the KEDA Go dependency to 2.21.0 to address CVE-2026-77524.
+  - kind: added
+    description: Evaluate candidate models against the champion and seasonal baseline using shared real holdout windows before activation.
+  - kind: added
+    description: Repair missing PostgreSQL training samples directly from the configured Prometheus source before native or CPU GRU training.
   - kind: added
     description: Automatically request KEDA reconciliation for missing predictive HPA metrics after scaler discovery failures.
   - kind: added

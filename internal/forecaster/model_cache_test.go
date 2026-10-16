@@ -112,6 +112,25 @@ type fakeActiveModels struct {
 	err    error
 }
 
+func TestModelCacheRefreshesValidationLeaseWithoutReloadingArtifact(t *testing.T) {
+	reader := &fakeActiveModels{models: []forecast.StoredModel{{ID: "same", WorkloadID: "workload", SourceFingerprint: "source", Engine: "seasonal-baseline", Artifact: []byte(`{"engine":"seasonal-baseline"}`), ActivatedAt: time.Now().Add(-4 * time.Hour)}}}
+	cache := NewModelCache("test", reader, time.Hour)
+	w := workloadstore.SamplingWorkload{ID: "workload", Spec: domain.WorkloadSpec{SourceFingerprint: "source"}}
+	if err := cache.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.ModelFor(w); ok {
+		t.Fatal("expired model served")
+	}
+	reader.models[0].ActivatedAt = time.Now()
+	if err := cache.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cache.ModelFor(w); !ok {
+		t.Fatal("freshly revalidated immutable artifact remained expired")
+	}
+}
+
 func (f *fakeActiveModels) ListActiveModels(context.Context, string) ([]forecast.StoredModel, error) {
 	return f.models, f.err
 }

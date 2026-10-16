@@ -2,12 +2,10 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/canberkturan/keda-replica-sense/internal/forecast"
 	"github.com/canberkturan/keda-replica-sense/internal/training"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -28,29 +26,8 @@ func (r *ModelRepository) CreateCandidate(ctx context.Context, candidate trainin
 	return id, nil
 }
 
-// ActiveValidation returns the immutable no-leakage validation metrics saved
-// with the currently active comparable model. A missing champion is normal.
-func (r *ModelRepository) ActiveValidation(ctx context.Context, clusterID, workloadID, sourceFingerprint string) (*forecast.ValidationMetrics, error) {
-	var raw []byte
-	err := r.database.QueryRow(ctx, `SELECT validation_metrics->'walk_forward' FROM models WHERE cluster_id=$1 AND workload_id=$2 AND source_fingerprint=$3 AND status='active'`, clusterID, workloadID, sourceFingerprint).Scan(&raw)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("load active model validation: %w", err)
-	}
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
-	var metrics forecast.ValidationMetrics
-	if err := json.Unmarshal(raw, &metrics); err != nil {
-		return nil, fmt.Errorf("decode active model validation: %w", err)
-	}
-	return &metrics, nil
-}
-
 func (r *ModelRepository) ListActiveModels(ctx context.Context, clusterID string) ([]forecast.StoredModel, error) {
-	rows, err := r.database.Query(ctx, `SELECT id,workload_id,source_fingerprint,engine,artifact_data,activated_at FROM models WHERE cluster_id=$1 AND status='active' ORDER BY activated_at DESC`, clusterID)
+	rows, err := r.database.Query(ctx, `SELECT id,workload_id,source_fingerprint,engine,artifact_data,greatest(activated_at,(validation_metrics->>'validated_at')::timestamptz) FROM models WHERE cluster_id=$1 AND status='active' ORDER BY activated_at DESC`, clusterID)
 	if err != nil {
 		return nil, fmt.Errorf("list active models: %w", err)
 	}
@@ -64,28 +41,4 @@ func (r *ModelRepository) ListActiveModels(ctx context.Context, clusterID string
 		models = append(models, model)
 	}
 	return models, rows.Err()
-}
-
-// Activate atomically retires the previous active candidate for the same
-// workload/source and promotes the requested candidate.
-func (r *ModelRepository) Activate(ctx context.Context, id string) error {
-	tx, err := r.database.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin model activation: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var clusterID, workloadID, fingerprint string
-	if err := tx.QueryRow(ctx, `SELECT cluster_id,workload_id,source_fingerprint FROM models WHERE id=$1 AND status='candidate' FOR UPDATE`, id).Scan(&clusterID, &workloadID, &fingerprint); err != nil {
-		return fmt.Errorf("load candidate model: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE models SET status='retired',retired_at=now() WHERE cluster_id=$1 AND workload_id=$2 AND source_fingerprint=$3 AND status='active'`, clusterID, workloadID, fingerprint); err != nil {
-		return fmt.Errorf("retire active model: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE models SET status='active',activated_at=now() WHERE id=$1 AND status='candidate'`, id); err != nil {
-		return fmt.Errorf("activate model: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit model activation: %w", err)
-	}
-	return nil
 }

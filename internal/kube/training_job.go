@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
 
+	"github.com/canberkturan/keda-replica-sense/internal/history"
 	"github.com/canberkturan/keda-replica-sense/internal/training"
 )
 
@@ -27,17 +28,18 @@ type TrainingJobCreator struct {
 	// EngineImages overrides Image for a trained engine. It allows a short-lived
 	// CPU PyTorch Job to train GRU artifacts while native Go/XGBoost jobs keep
 	// their existing image and dependency boundary.
-	EngineImages       map[string]string
-	ImagePullPolicy    corev1.PullPolicy
-	ServiceAccount     string
-	DatabaseSecretName string
-	DatabaseSecretKey  string
-	BackoffLimit       int32
-	TTLSecondsAfter    int32
-	ActiveDeadlineSecs int64
-	Resources          corev1.ResourceRequirements
-	SeasonalPeriod     time.Duration
-	MaxGapIntervals    int
+	EngineImages        map[string]string
+	ImagePullPolicy     corev1.PullPolicy
+	ServiceAccount      string
+	DatabaseSecretName  string
+	DatabaseSecretKey   string
+	BackoffLimit        int32
+	TTLSecondsAfter     int32
+	ActiveDeadlineSecs  int64
+	Resources           corev1.ResourceRequirements
+	SeasonalPeriod      time.Duration
+	MaxGapIntervals     int
+	HistoryRepairPolicy history.Policy
 }
 
 func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error {
@@ -72,6 +74,13 @@ func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error 
 	if maxGapIntervals <= 0 {
 		maxGapIntervals = 2
 	}
+	repairPolicy := c.HistoryRepairPolicy
+	if repairPolicy == (history.Policy{}) {
+		repairPolicy = history.DefaultPolicy()
+	}
+	if err := repairPolicy.Validate(); err != nil {
+		return err
+	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: trainingJobName(run.RunID), Namespace: c.Namespace, Labels: map[string]string{"app": "replicasense-trainer", "replicasense.keda.sh/training-run": run.RunID}},
 		Spec: batchv1.JobSpec{BackoffLimit: &backoff, TTLSecondsAfterFinished: &ttl, ActiveDeadlineSeconds: &deadline, Template: corev1.PodTemplateSpec{
@@ -82,6 +91,10 @@ func (c TrainingJobCreator) Create(ctx context.Context, run training.Job) error 
 			}},
 		},
 	}
+	job.Spec.Template.Spec.Containers[0].Env = append(job.Spec.Template.Spec.Containers[0].Env,
+		corev1.EnvVar{Name: "REPLICASENSE_TRAINER_HISTORY_REPAIR_TIMEOUT", Value: repairPolicy.Timeout.String()},
+		corev1.EnvVar{Name: "REPLICASENSE_TRAINER_HISTORY_QUERY_TIMEOUT", Value: repairPolicy.QueryTimeout.String()},
+		corev1.EnvVar{Name: "REPLICASENSE_TRAINER_HISTORY_MAX_POINTS", Value: strconv.Itoa(repairPolicy.MaxPoints)})
 	if _, err := c.Client.BatchV1().Jobs(c.Namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create trainer Job: %w", err)
 	}

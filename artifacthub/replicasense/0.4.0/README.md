@@ -22,5 +22,15 @@ stale, or unreliable inputs remain withheld. Recovery settings and state are
 visible through Prometheus metrics.
 
 GRU training Jobs use the release-matched CPU PyTorch Trainer by default.
+Both trainers repair missing PostgreSQL history from the configured Prometheus
+source before fitting; unresolved source gaps fail training without fabricated
+observations. Trained artifacts become candidates and must pass shared
+holdout comparisons before replacing an active model. Upgrade the forecaster,
+scheduler, and trainer images together to use this flow.
+
+The Go dependency is upgraded to KEDA 2.21.0 for CVE-2026-77524. The separately
+installed KEDA operator must also be patched; the ReplicaSense chart does not
+upgrade it.
+
 Every release image must pass a vulnerability scan before publication. See
 the installation, architecture, and metrics guides for operational details.

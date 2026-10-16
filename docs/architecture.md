@@ -100,6 +100,11 @@ The chart uses a small, purposeful topology:
 | Training scheduler | 1 | Creates daily per-workload Trainer Jobs. | Existing active models continue until their maximum age. |
 | Trainer Job | on demand | Trains and validates one workload model. | A failed candidate is not promoted. |
 
+Trainer Jobs need outbound access to both PostgreSQL and the workload's
+Prometheus HTTP API. They repair missing history before fitting but still have
+no Kubernetes API token or permission to alter scaling resources. Allow that
+Prometheus egress in any cluster-managed NetworkPolicy.
+
 The scaler is the availability-sensitive component because KEDA must discover
 every trigger on a combined ScaledObject. Keep two replicas, keep the PDB, and
 place them on separate nodes when the cluster has more than one node. If every
@@ -150,7 +155,7 @@ The other engines are useful comparisons or simpler operational choices:
 | `rolling-quantile` | A conservative, transparent fallback | Quantile of historical horizon maxima. |
 | `holt-winters` | Smooth level, trend, and seasonality | Additive trend/seasonal projection. |
 | `xgboost` | Calendar-driven, non-linear recurring patterns | Learned horizon-maximum quantiles. |
-| `gru` | Repeating patterns with short-term sequence dynamics | A gated recurrent network trained on 60 causal demand samples plus business-time calendar features. |
+| `gru` | Repeating patterns with short-term sequence dynamics | A gated recurrent network with business-time calendar features; the default CPU PyTorch trainer uses 120 samples, while the native Go variant uses 60. |
 
 The GRU input sequence contains the observed demand, clock time, day of week,
 day of month, month, and weekend status in `businessTimezone`. It predicts the
@@ -161,18 +166,24 @@ the existing trainer and forecaster images are sufficient.
 
 Training is automatic. The scheduler considers each active workload once per
 `REPLICASENSE_TRAINING_INTERVAL` (24 hours by default), spreads jobs within the
-slot, and writes a candidate into PostgreSQL. The candidate is evaluated with
-walk-forward windows and is promoted only if it meets the policy. A completed
-Job is cleaned up by the controller; the run and model records remain for
-audit.
+slot, and writes a candidate into PostgreSQL. Training never activates a model.
+A separate serial worker in the Go forecaster loads the exact candidate and
+champion artifacts and evaluates both, plus the seasonal baseline, on identical
+fully observed horizons after their fitting cutoffs. Shadow mode records the
+same decision without changing the active model. A completed Job is cleaned up
+by the controller; the run and model records remain for audit. See
+[model promotion](model-promotion.md) for evaluation, expiry, and rollback rules.
 
 An external trigger can request one idempotent immediate run with
 `immediateTraining: "true"`. Pair it with `clearOldModels: "true"` only when
 you explicitly want to discard the current model artifacts for that durable
 workload identity. The reset is keyed to the full policy revision, so ordinary
 controller reconciliations cannot repeatedly delete models or enqueue Jobs.
-An immediate Job waits for sampler history, and its policy revision is verified
-again by the trainer before it can publish a model. A Job from a replaced
+An immediate Job starts without waiting for complete sampler history. Before
+fitting, every trainer repairs missing closed sampling slots directly from the
+workload's original Prometheus query, then reloads and checks PostgreSQL. Its
+policy revision is verified again before repair inserts and model publication.
+A Job from a replaced
 configuration therefore cannot reintroduce an obsolete model after a reset.
 
 Do not retrain every hour just because data arrives every minute. The

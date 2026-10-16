@@ -16,7 +16,12 @@ type ValidationMetrics struct {
 	MeanAbsoluteError   float64 `json:"mean_absolute_error"`
 	// PinballLossP95 retains its persisted JSON name for compatibility and is
 	// measured at the request's configured upper operational quantile.
-	PinballLossP95 float64 `json:"pinball_loss_p95"`
+	PinballLossP95             float64 `json:"pinball_loss_p95"`
+	MeanUnderprediction        float64 `json:"mean_underprediction"`
+	MaxRelativeUnderprediction float64 `json:"max_relative_underprediction"`
+	PeakMeanUnderprediction    float64 `json:"peak_mean_underprediction"`
+	// A demand-only capacity proxy, not measured cost or proof of readiness.
+	ExcessReplicaMinutes float64 `json:"excess_replica_minutes"`
 }
 
 func WalkForward(model Model, samples []domain.Sample, request Request, maxWindows int) (ValidationMetrics, error) {

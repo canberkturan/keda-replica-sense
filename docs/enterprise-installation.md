@@ -17,9 +17,9 @@ capacity guard work.
 
 You need:
 
-- Kubernetes 1.28 or later and KEDA 2.x.
+- Kubernetes 1.28 or later and KEDA 2.x, on versions supported by your platform.
 - Helm 3.13 or later.
-- Prometheus reachable by KEDA and the ReplicaSense sampler.
+- Prometheus reachable by KEDA, the ReplicaSense sampler, and Trainer Jobs.
 - A PostgreSQL database for ReplicaSense. TLS is recommended for every
   networked deployment.
 - Permission to create a namespace, Secrets, Deployments, Services, and KEDA
@@ -27,6 +27,14 @@ You need:
 
 The chart does not install KEDA, Prometheus, or PostgreSQL. This keeps those
 shared platform services under the control of their normal operators.
+
+Use KEDA 2.21.0 or later as the security baseline to address
+[CVE-2026-77524](https://github.com/kedacore/keda/releases/tag/v2.21.0).
+Rebuilding ReplicaSense updates its Go dependency, not the operator running in
+your cluster. This recommendation concerns security, not a new external-scaler
+protocol requirement. If you use Vault Kubernetes authentication or
+`boundServiceAccountToken`, review KEDA's token-audience migration notes before
+upgrading.
 
 ## 1. Prepare PostgreSQL
 

@@ -24,12 +24,14 @@ expectations.
 - Bridges tightly bounded short gaps with clearly marked, inference-only
   estimates and conservative scaling safeguards; observed/training data remain
   unchanged, and stale or unreliable inputs stay withheld.
-- Stores/evaluates snapshots; evaluates coverage, underprediction, MAE, and
-  P95 pinball loss with walk-forward validation.
+- Stores/evaluates snapshots; compares exact model artifacts on identical
+  held-out, fully observed horizons, including coverage, underprediction
+  severity, quantile loss, and peak-period behavior.
 - Schedules, validates, stores, and promotes per-workload XGBoost models
-  through Kubernetes Trainer Jobs and PostgreSQL model artifacts. Promotion
-  requires safety thresholds plus a comparison with an active champion or the
-  deterministic baseline; rejected candidates remain auditable.
+  through Kubernetes Trainer Jobs and PostgreSQL model artifacts. A shared Go
+  evaluator controls promotion, supports shadow mode and evidence-gated
+  rollback, and keeps rejected candidates auditable. See
+  [model promotion](docs/model-promotion.md) for the policy and operations.
 
 ## Install
 

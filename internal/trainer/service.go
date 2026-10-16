@@ -14,6 +14,7 @@ import (
 	"github.com/canberkturan/keda-replica-sense/internal/domain"
 	"github.com/canberkturan/keda-replica-sense/internal/features"
 	"github.com/canberkturan/keda-replica-sense/internal/forecast"
+	"github.com/canberkturan/keda-replica-sense/internal/history"
 	"github.com/canberkturan/keda-replica-sense/internal/training"
 	"github.com/canberkturan/keda-replica-sense/internal/workloadstore"
 )
@@ -31,8 +32,10 @@ type Runs interface {
 }
 type Models interface {
 	CreateCandidate(context.Context, training.ModelCandidate) (string, error)
-	Activate(context.Context, string) error
-	ActiveValidation(context.Context, string, string, string) (*forecast.ValidationMetrics, error)
+}
+
+type HistoryPreparer interface {
+	Repair(context.Context, workloadstore.SamplingWorkload, time.Time, time.Time) (history.Report, error)
 }
 
 type Service struct {
@@ -48,6 +51,10 @@ type Service struct {
 	// MaxGapIntervals bounds tolerated source gaps. The production default is
 	// conservative; accelerated labs may opt into a larger value.
 	MaxGapIntervals int
+	// Holdout observations are never passed to fitting or normalization. The
+	// shared Go worker evaluates the exact stored artifact after publication.
+	Holdout time.Duration
+	History HistoryPreparer
 }
 
 func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine string, now time.Time) (err error) {
@@ -84,7 +91,14 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	}
 	end := now.UTC().Truncate(workload.Spec.Forecast.SamplingInterval)
 	start := end.Add(-workload.Spec.Forecast.TrainingWindow)
-	samples, err := s.Samples.ListSamplesForWindow(ctx, *workload, start, end)
+	var historyReport history.Report
+	if s.History != nil {
+		historyReport, err = s.History.Repair(ctx, *workload, start, end)
+		if err != nil {
+			return fmt.Errorf("prepare training history: %w", err)
+		}
+	}
+	samples, err := s.Samples.ListSamplesForWindow(ctx, *workload, start, end.Add(-time.Nanosecond))
 	if err != nil {
 		return err
 	}
@@ -96,6 +110,12 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 		return fmt.Errorf("seasonal period %s must be an exact multiple of sampling interval %s", seasonalPeriod, workload.Spec.Forecast.SamplingInterval)
 	}
 	minimum := int(seasonalPeriod / workload.Spec.Forecast.SamplingInterval)
+	// Never pretend a source outage is a regular model sampling step. An older
+	// complete segment is usable, but its actual fitting cutoff stays explicit.
+	samples, err = dataset.TrainingSegment(samples, workload.Spec.Forecast.SamplingInterval, minimum+minimum/4)
+	if err != nil {
+		return err
+	}
 	maxGapIntervals := s.MaxGapIntervals
 	if maxGapIntervals <= 0 {
 		maxGapIntervals = 2
@@ -109,23 +129,22 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	}
 	request := forecast.Request{Horizon: workload.Spec.Forecast.DecisionHorizon(), SamplingInterval: workload.Spec.Forecast.SamplingInterval, SeasonalPeriod: seasonalPeriod, Quantile: workload.Spec.Forecast.Quantile, BusinessLocation: location}
 	var model forecast.Model
-	var validation forecast.ValidationMetrics
 	var artifact []byte
+	holdout := s.Holdout
+	if holdout <= 0 {
+		holdout = 48 * time.Hour
+	}
+	reserved := min(int(holdout/request.SamplingInterval), len(samples)/5)
+	if reserved < 1 || len(samples)-reserved < minimum {
+		return fmt.Errorf("insufficient training history after reserving holdout")
+	}
+	fitSamples := samples[:len(samples)-reserved]
 	if engine == "xgboost" {
-		model, artifact, err = forecast.TrainXGBoost(samples, request)
-		if err == nil {
-			validation, err = forecast.ValidateXGBoost(samples, request, 48)
-		}
+		model, artifact, err = forecast.TrainXGBoost(fitSamples, request)
 	} else if engine == "gru" {
-		model, artifact, err = forecast.TrainGRU(samples, request)
-		if err == nil {
-			validation, err = forecast.ValidateGRU(samples, request, 12)
-		}
+		model, artifact, err = forecast.TrainGRU(fitSamples, request)
 	} else {
 		model, err = forecast.ResolveModel(engine)
-		if err == nil {
-			validation, err = forecast.WalkForward(model, samples, request, 288)
-		}
 		if err == nil {
 			artifactMetadata := map[string]any{"format": "replicasense-model-v1", "engine": model.Engine()}
 			if model.Engine() == "seasonal-baseline" {
@@ -137,37 +156,22 @@ func (s Service) Run(ctx context.Context, clusterID, workloadID, runID, engine s
 	if err != nil {
 		return err
 	}
-	// The deterministic seasonal baseline is evaluated on the same expanding
-	// windows as the candidate. It provides an auditable no-champion reference
-	// without looking beyond each validation cut.
-	baselineValidation, err := forecast.WalkForward(forecast.SeasonalBaseline{}, samples, request, 288)
-	if err != nil {
-		return fmt.Errorf("validate deterministic baseline: %w", err)
+	if closer, ok := model.(interface{ Close() }); ok {
+		defer closer.Close()
 	}
-	champion, championErr := s.Models.ActiveValidation(ctx, clusterID, workload.ID, workload.Spec.SourceFingerprint)
-	decision := training.PromotionDecision{}
-	if championErr != nil {
-		decision = training.PromotionDecision{Reason: "active_champion_validation_unavailable"}
-	} else {
-		decision = training.EvaluatePromotion(training.DefaultPromotionPolicy(), validation, champion, baselineValidation)
-	}
-	metrics, err := json.Marshal(map[string]any{"sample_count": len(samples), "baseline": model.Engine() != "xgboost" && model.Engine() != "gru", "operational_quantile": forecastOperationalQuantile(request), "walk_forward": validation, "deterministic_baseline": baselineValidation, "promotion": decision})
+	contract := training.ContractFor(*workload, seasonalPeriod)
+	metrics, err := json.Marshal(map[string]any{"sample_count": len(fitSamples), "holdout_sample_count": reserved, "history_repair": historyReport, "operational_quantile": forecastOperationalQuantile(request), "promotion": training.PromotionDecision{Reason: "awaiting_shared_artifact_evaluation"}})
 	if err != nil {
 		return err
 	}
-	datasetDigest := fingerprint(samples)
+	datasetDigest := fingerprint(fitSamples)
 	artifactHash := sha256.Sum256(artifact)
 	featureSchema := featureSchemaFor(model.Engine())
-	modelID, err := s.Models.CreateCandidate(ctx, training.ModelCandidate{ClusterID: clusterID, WorkloadID: workload.ID, SourceFingerprint: workload.Spec.SourceFingerprint, Engine: model.Engine(), FeatureSchema: featureSchema, TrainingWindowStart: start, TrainingWindowEnd: end, DatasetFingerprint: datasetDigest, Hyperparameters: []byte(`{}`), ValidationMetrics: metrics, Artifact: artifact, ArtifactSHA256: hex.EncodeToString(artifactHash[:])})
+	modelID, err := s.Models.CreateCandidate(ctx, training.ModelCandidate{ClusterID: clusterID, WorkloadID: workload.ID, SourceFingerprint: workload.Spec.SourceFingerprint, Engine: model.Engine(), FeatureSchema: featureSchema, TrainingWindowStart: fitSamples[0].ObservedAt, TrainingWindowEnd: fitSamples[len(fitSamples)-1].ObservedAt, DatasetFingerprint: datasetDigest, Hyperparameters: training.EncodeContract(contract), ValidationMetrics: metrics, Artifact: artifact, ArtifactSHA256: hex.EncodeToString(artifactHash[:])})
 	if err != nil {
 		return err
 	}
-	if decision.Promote {
-		if err := s.Models.Activate(ctx, modelID); err != nil {
-			return fmt.Errorf("activate trained model: %w", err)
-		}
-	}
-	return s.Runs.MarkSucceeded(ctx, runID, modelID, len(samples), metrics)
+	return s.Runs.MarkSucceeded(ctx, runID, modelID, len(fitSamples), metrics)
 }
 
 func featureSchemaFor(engine string) string {

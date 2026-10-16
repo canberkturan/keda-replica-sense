@@ -57,6 +57,7 @@ func (c *ModelCache) Refresh(ctx context.Context) error {
 	for _, item := range stored {
 		key := item.WorkloadID + ":" + item.SourceFingerprint
 		if cached, ok := previous[key]; ok && cached.id == item.ID {
+			cached.activatedAt = item.ActivatedAt // includes successful fresh revalidation
 			next[key] = cached
 			continue
 		}
