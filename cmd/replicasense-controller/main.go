@@ -16,6 +16,7 @@ import (
 
 	"github.com/canberkturan/keda-replica-sense/internal/config"
 	"github.com/canberkturan/keda-replica-sense/internal/controller"
+	"github.com/canberkturan/keda-replica-sense/internal/kube"
 	"github.com/canberkturan/keda-replica-sense/internal/observability"
 	"github.com/canberkturan/keda-replica-sense/internal/postgres"
 	kedav1alpha1 "github.com/kedacore/keda/v2/apis/keda/v1alpha1"
@@ -81,6 +82,26 @@ func main() {
 	if err := reconciler.SetupWithManager(manager); err != nil {
 		log.Error(err, "set up ScaledObject controller")
 		os.Exit(1)
+	}
+	if configuration.HPARecoveryEnabled {
+		probe, err := kube.NewPredictiveMetricProbe(restConfig)
+		if err != nil {
+			log.Error(err, "create predictive metric probe")
+			os.Exit(1)
+		}
+		if err := manager.Add(&controller.HPARecovery{
+			Reader:        manager.GetAPIReader(),
+			Writer:        manager.GetClient(),
+			ParserOptions: configuration.Parser,
+			Probe:         probe,
+			Observer:      observability.NewHPARecoveryMetrics(ctrlmetrics.Registry),
+			Interval:      configuration.HPARecoveryInterval,
+			ProbeTimeout:  configuration.HPARecoveryProbeTimeout,
+			Log:           log.WithName("hpa-recovery"),
+		}); err != nil {
+			log.Error(err, "set up predictive HPA recovery")
+			os.Exit(1)
+		}
 	}
 	if err := manager.Add(controller.TrainerJobCleaner{
 		Reader:    manager.GetAPIReader(),

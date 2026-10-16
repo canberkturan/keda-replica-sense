@@ -28,6 +28,28 @@ func TestLoadController(t *testing.T) {
 	if config.MetricsBindAddress != ":8080" || config.HealthProbeBindAddress != ":8081" {
 		t.Fatalf("unexpected default addresses: %#v", config)
 	}
+	if !config.HPARecoveryEnabled || config.HPARecoveryInterval != 30*time.Second || config.HPARecoveryProbeTimeout != 5*time.Second {
+		t.Fatalf("unexpected default HPA recovery settings: %#v", config)
+	}
+}
+
+func TestLoadControllerHPARecoverySettings(t *testing.T) {
+	environment := map[string]string{
+		"REPLICASENSE_CLUSTER_ID": "lab", "REPLICASENSE_SCALER_ADDRESSES": "replicasense.default.svc:6000", "REPLICASENSE_DATABASE_URL": "postgres://example",
+		"REPLICASENSE_HPA_RECOVERY_ENABLED": "false", "REPLICASENSE_HPA_RECOVERY_INTERVAL": "1m", "REPLICASENSE_HPA_RECOVERY_PROBE_TIMEOUT": "3s",
+	}
+	configuration, err := LoadController(environmentLookup(environment))
+	if err != nil || configuration.HPARecoveryEnabled || configuration.HPARecoveryInterval != time.Minute || configuration.HPARecoveryProbeTimeout != 3*time.Second {
+		t.Fatalf("unexpected HPA recovery settings: %#v, %v", configuration, err)
+	}
+	for _, key := range []string{"REPLICASENSE_HPA_RECOVERY_ENABLED", "REPLICASENSE_HPA_RECOVERY_INTERVAL", "REPLICASENSE_HPA_RECOVERY_PROBE_TIMEOUT"} {
+		old := environment[key]
+		environment[key] = "invalid"
+		if _, err := LoadController(environmentLookup(environment)); err == nil {
+			t.Fatalf("%s must reject invalid values", key)
+		}
+		environment[key] = old
+	}
 }
 
 func TestLoadControllerAllowsExplicitMinimumTrainingWindow(t *testing.T) {

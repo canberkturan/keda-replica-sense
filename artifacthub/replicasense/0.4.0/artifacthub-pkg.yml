@@ -1,0 +1,38 @@
+version: 0.4.0
+name: replica-sense
+alternativeName: keda-replica-sense
+category: ai-machine-learning
+displayName: ReplicaSense
+createdAt: "2026-10-16T00:00:00Z"
+description: KEDA external scaler for safe predictive autoscaling using Prometheus, XGBoost or GRU forecasts, and conservative surge protection.
+license: Apache-2.0
+homeURL: https://github.com/canberkturan/keda-replica-sense
+appVersion: 0.4.0
+keywords: [keda, keda-scaler, external-scaler, autoscaling, predictive-autoscaling, xgboost, gru, prometheus, ai-machine-learning]
+containersImages:
+  - {name: Controller, image: ghcr.io/canberkturan/replicasense-controller:0.4.0}
+  - {name: Sampler, image: ghcr.io/canberkturan/replicasense-sampler:0.4.0}
+  - {name: External scaler, image: ghcr.io/canberkturan/replicasense-scaler:0.4.0}
+  - {name: XGBoost and GRU forecaster, image: ghcr.io/canberkturan/replicasense-forecaster:0.4.0-xgboost}
+  - {name: XGBoost trainer, image: ghcr.io/canberkturan/replicasense-trainer:0.4.0-xgboost}
+  - {name: CPU PyTorch GRU trainer, image: ghcr.io/canberkturan/replicasense-trainer:0.4.0-pytorch-gru}
+  - {name: Training scheduler, image: ghcr.io/canberkturan/replicasense-training-scheduler:0.4.0}
+  - {name: Portable Go forecaster, image: ghcr.io/canberkturan/replicasense-forecaster:0.4.0}
+  - {name: Portable Go trainer, image: ghcr.io/canberkturan/replicasense-trainer:0.4.0}
+maintainers:
+  - {name: Canberk TURAN, email: canberkkturann@gmail.com}
+links:
+  - {name: Source, url: https://github.com/canberkturan/keda-replica-sense}
+  - {name: Documentation, url: https://github.com/canberkturan/keda-replica-sense/tree/main/docs}
+  - {name: Support, url: https://github.com/canberkturan/keda-replica-sense/issues}
+install: |
+  Install the ReplicaSense Helm chart, then add an external trigger to a KEDA ScaledObject.
+changes:
+  - kind: added
+    description: Automatically request KEDA reconciliation for missing predictive HPA metrics after scaler discovery failures.
+  - kind: added
+    description: Bridge bounded short gaps with marked inference-only interpolation, fresh real inputs, and conservative scaling safeguards.
+  - kind: fixed
+    description: Use trained-model input lengths instead of a blanket seasonal warm-up for XGBoost and GRU inference.
+  - kind: added
+    description: Expose forecast readiness, withholding reasons, estimated input counts, and HPA recovery metrics.

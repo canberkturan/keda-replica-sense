@@ -8,8 +8,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/canberkturan/keda-replica-sense/internal/dataset"
 	"github.com/canberkturan/keda-replica-sense/internal/domain"
 )
+
+func TestXGBoostInferenceLookbackIsIndependentOfTrainingWindow(t *testing.T) {
+	if got := (&xgboostModel{}).InferenceLookback(); got != 61 {
+		t.Fatalf("inference needs the current point plus 60 lags, got %d", got)
+	}
+}
+
+func TestNativeXGBoostConsumesBoundedInterpolatedInputs(t *testing.T) {
+	request := Request{Horizon: time.Minute, SamplingInterval: time.Minute, SeasonalPeriod: 2 * time.Minute, Quantile: .97}
+	values := make([]domain.Sample, 80)
+	start := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	for index := range values {
+		values[index] = domain.Sample{ObservedAt: start.Add(time.Duration(index) * time.Minute), ObservedValue: 100 + float64(index%6)}
+	}
+	model, _, err := TrainXGBoost(values, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer model.(*xgboostModel).Close()
+	var observed []domain.Sample
+	for index, sample := range values {
+		if index != 74 && index != 75 {
+			observed = append(observed, sample)
+		}
+	}
+	input, err := dataset.PrepareInferenceHistory(observed, dataset.InterpolationPolicy{SamplingInterval: time.Minute, Lookback: model.(InferenceLookbackModel).InferenceLookback()})
+	if err != nil || input.EstimatedCount != 2 || len(input.Samples) != 61 {
+		t.Fatalf("native recovery input: estimated=%d samples=%d err=%v", input.EstimatedCount, len(input.Samples), err)
+	}
+	prediction, err := model.PredictSamples(input.Samples, request)
+	if err != nil || math.IsNaN(prediction.P95) || math.IsInf(prediction.P95, 0) || prediction.P95 < 0 {
+		t.Fatalf("recovered native XGBoost inference: %#v, %v", prediction, err)
+	}
+}
 
 func TestXGBoostArtifactLoadsAndPredictsHorizonMaximum(t *testing.T) {
 	interval := time.Minute

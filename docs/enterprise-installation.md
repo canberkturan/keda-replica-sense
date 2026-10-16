@@ -69,7 +69,7 @@ clusters; it does not need to be globally public.
 ```bash
 helm upgrade --install replicasense \
   oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.3.9 \
+  --version 0.4.0 \
   --namespace replicasense-system \
   --set clusterID=cluster-east-1
 ```
@@ -276,8 +276,67 @@ validated before promotion; rejected candidates stay auditable in PostgreSQL.
   predictive metrics once their input ages past the freshness limit; the native
   KEDA trigger remains the reactive path. After recovery it range-backfills a
   bounded recent gap when Prometheus can supply authoritative history. If that
-  is not possible, it resumes only after collecting a valid continuous segment
-  and never fabricates missing demand values.
+  is not possible, the forecaster may bridge a tightly bounded short gap in
+  its disposable inference input. Those points are marked as estimated and
+  never persisted as observations or used for training. Long or unreliable
+  gaps remain withheld until a valid real post-gap input window is available.
 - If every external-scaler Service endpoint is unavailable, KEDA cannot obtain
-  that external metric. Restore a scaler endpoint; the combined `ScaledObject`
-  cannot use its reactive path during this KEDA discovery failure.
+  that external metric. During startup it can configure a combined HPA with
+  only the available native metric. The elected ReplicaSense controller checks
+  for missing predictive metrics and requests KEDA reconciliation after the
+  metrics API recovers; neither retraining nor a manual replica change is
+  required. Recovery is enabled by default and excludes paused ScaledObjects
+  and `scalingModifiers` composite-metric HPAs.
+
+### Recovery after a cluster restart
+
+Healthy pods do not by themselves prove that predictive scaling has recovered.
+Check that your HPA contains both the native and ReplicaSense metric:
+
+```bash
+kubectl -n YOUR_WORKLOAD_NAMESPACE get hpa YOUR_HPA \
+  -o jsonpath='{range .spec.metrics[*]}{.external.metric.name}{"\n"}{end}'
+```
+
+For ordinary independent triggers, expect names such as `s0-prometheus` and
+`s1-replicasense_predictive`; the prefix follows each trigger's position in the
+ScaledObject. The recovery controller scans every 30 seconds and retries
+failed probes or repair requests with backoff capped at five minutes. It
+changes only an HPA annotation to wake KEDA, leaving models, daily training,
+and reactive scaling settings untouched. A request is not considered restored
+until the expected predictive metric is observed in the HPA specification.
+
+The controller environment settings are `REPLICASENSE_HPA_RECOVERY_ENABLED`
+(`true`), `REPLICASENSE_HPA_RECOVERY_INTERVAL` (`30s`), and
+`REPLICASENSE_HPA_RECOVERY_PROBE_TIMEOUT` (`5s`). Override them through
+`components.controller.env` in Helm if needed. If recovery reports
+`probe_failed`, check the KEDA metrics API, scaler availability, and controller
+RBAC before changing training settings.
+
+### Forecast recovery after a short source gap
+
+Interpolation is enabled by default, limited to real bounding observations at
+most five minutes apart, stable anchors, at most 5% estimated inputs, and two
+distinct real post-gap samples. There is no extrapolation of a stale tail.
+Estimated inputs limit predictive scale-up to one additional replica per
+decision and cannot request downscale; normal health/capacity guards remain
+active. Training and surge detection still use real observations only.
+
+Configure the policy through Helm:
+
+```yaml
+components:
+  forecaster:
+    env:
+      REPLICASENSE_SHORT_GAP_INTERPOLATION_ENABLED: "true"
+      REPLICASENSE_INFERENCE_MAX_GAP: 5m
+```
+
+`replicasense_forecast_ready` is `1` when the latest forecast succeeds and `0`
+when withheld. `replicasense_forecast_status` explains the current state through
+its `reason` label, including `interpolated_inputs`, `insufficient_history`,
+`unreliable_inputs`, or `stale_source`.
+`replicasense_forecast_input_estimated_samples` shows how many points in the
+successful model input were estimated. The same count is retained in the
+snapshot's safety reason for audit. Old demand gauges are removed on a failed
+workload forecast, so a dashboard does not silently show a frozen prior guess.

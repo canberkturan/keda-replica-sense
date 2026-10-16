@@ -71,15 +71,20 @@ func main() {
 	surgePolicy.BaselineMultiplier = multiplierEnv("REPLICASENSE_SURGE_BASELINE_MULTIPLIER", surgePolicy.BaselineMultiplier)
 	surgePolicy.ConfirmationSamples = positiveIntEnv("REPLICASENSE_SURGE_CONFIRMATION_SAMPLES", surgePolicy.ConfirmationSamples)
 	surgePolicy.MaxMultiplier = multiplierEnv("REPLICASENSE_SURGE_MAX_MULTIPLIER", surgePolicy.MaxMultiplier)
-	service := forecaster.Service{Samples: repo, Snapshots: forecastRepository, SeasonalPeriod: period, MinimumSamples: minimum, DisableSurgeDetection: boolEnv("REPLICASENSE_DISABLE_SURGE_DETECTION", false), SurgePolicy: surgePolicy, Models: modelCache, CurrentReplicas: func(ctx context.Context, w workloadstore.SamplingWorkload) (float64, error) {
-		return replicaReader.CurrentReplicas(ctx, w.Spec.Key.Namespace, w.Spec.ScaleTarget.Name)
-	}, ClusterHealthy: healthChecker.Healthy}
+	service := forecaster.Service{Samples: repo, Snapshots: forecastRepository, SeasonalPeriod: period, MinimumSamples: minimum,
+		DisableShortGapInterpolation: !boolEnv("REPLICASENSE_SHORT_GAP_INTERPOLATION_ENABLED", true),
+		InterpolationMaxGap:          durationEnv("REPLICASENSE_INFERENCE_MAX_GAP", 5*time.Minute),
+		DisableSurgeDetection:        boolEnv("REPLICASENSE_DISABLE_SURGE_DETECTION", false), SurgePolicy: surgePolicy, Models: modelCache, CurrentReplicas: func(ctx context.Context, w workloadstore.SamplingWorkload) (float64, error) {
+			return replicaReader.CurrentReplicas(ctx, w.Spec.Key.Namespace, w.Spec.ScaleTarget.Name)
+		}, ClusterHealthy: healthChecker.Healthy}
 	service.PredictiveAllowed = func(ctx context.Context, w workloadstore.SamplingWorkload, current, desired float64) bool {
 		return capacityGuard.Allows(ctx, w.Spec.Key.Namespace, w.Spec.ScaleTarget.Name, current, desired) && budgetGuard.Allows(ctx, w, desired)
 	}
 	service.OnForecast = func(w workloadstore.SamplingWorkload, snapshot domain.ForecastSnapshot) {
 		metrics.Record(w, snapshot, time.Now())
 	}
+	service.OnInputQuality = metrics.RecordInputQuality
+	service.OnUnavailable = metrics.RecordUnavailable
 	evaluator := postgres.NewEvaluator(pool)
 	for {
 		now := time.Now()

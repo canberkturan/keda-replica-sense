@@ -42,7 +42,7 @@ spec:
           {{- else }}
           image: {{ printf "%s:%s" $config.image.repository ($config.image.tag | toString) | quote }}
           {{- end }}
-          imagePullPolicy: {{ $root.Values.imagePullPolicy }}
+          imagePullPolicy: {{ default $root.Values.imagePullPolicy $config.imagePullPolicy }}
           securityContext:
             {{- toYaml $root.Values.containerSecurityContext | nindent 12 }}
           {{- with $config.ports }}

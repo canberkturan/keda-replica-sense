@@ -27,6 +27,15 @@ rules:
   - apiGroups: ["keda.sh"]
     resources: ["scaledobjects"]
     verbs: ["get", "list", "watch"]
+  # Recovery only patches HPA metadata to request KEDA reconciliation. The
+  # controller never writes metric specifications or desired replicas.
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["external.metrics.k8s.io"]
+    resources: ["*"]
+    # A named external metric is a value-list endpoint with a label selector.
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

@@ -19,6 +19,9 @@ type Controller struct {
 	LeaderElectionNamespace   string
 	SystemNamespace           string
 	TrainerJobCleanupInterval time.Duration
+	HPARecoveryEnabled        bool
+	HPARecoveryInterval       time.Duration
+	HPARecoveryProbeTimeout   time.Duration
 	DatabaseURL               string
 }
 
@@ -57,6 +60,18 @@ func LoadController(lookup func(string) string) (Controller, error) {
 	if err != nil {
 		return Controller{}, fmt.Errorf("REPLICASENSE_MIN_TRAINING_WINDOW: %w", err)
 	}
+	hpaRecoveryEnabled, err := parseBoolWithDefault(lookup("REPLICASENSE_HPA_RECOVERY_ENABLED"), true)
+	if err != nil {
+		return Controller{}, fmt.Errorf("REPLICASENSE_HPA_RECOVERY_ENABLED: %w", err)
+	}
+	hpaRecoveryInterval, err := durationWithDefault(lookup("REPLICASENSE_HPA_RECOVERY_INTERVAL"), 30*time.Second)
+	if err != nil {
+		return Controller{}, fmt.Errorf("REPLICASENSE_HPA_RECOVERY_INTERVAL: %w", err)
+	}
+	hpaRecoveryProbeTimeout, err := durationWithDefault(lookup("REPLICASENSE_HPA_RECOVERY_PROBE_TIMEOUT"), 5*time.Second)
+	if err != nil {
+		return Controller{}, fmt.Errorf("REPLICASENSE_HPA_RECOVERY_PROBE_TIMEOUT: %w", err)
+	}
 
 	return Controller{
 		Parser: scaledobject.ParserOptions{
@@ -73,6 +88,9 @@ func LoadController(lookup func(string) string) (Controller, error) {
 		LeaderElectionNamespace:   leaderElectionNamespace,
 		SystemNamespace:           systemNamespace,
 		TrainerJobCleanupInterval: cleanupInterval,
+		HPARecoveryEnabled:        hpaRecoveryEnabled,
+		HPARecoveryInterval:       hpaRecoveryInterval,
+		HPARecoveryProbeTimeout:   hpaRecoveryProbeTimeout,
 		DatabaseURL:               databaseURL,
 	}, nil
 }

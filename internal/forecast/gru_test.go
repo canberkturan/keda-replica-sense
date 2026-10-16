@@ -6,8 +6,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/canberkturan/keda-replica-sense/internal/dataset"
 	"github.com/canberkturan/keda-replica-sense/internal/domain"
 )
+
+func TestGRUInferenceLookbackUsesArtifactSequenceLength(t *testing.T) {
+	for _, model := range []Model{&gruModel{sequenceLength: 60}, &pytorchGRUModel{sequenceLength: 120}} {
+		lookback, ok := model.(InferenceLookbackModel)
+		if !ok || lookback.InferenceLookback() < 1 {
+			t.Fatalf("GRU model %T must expose its artifact input length", model)
+		}
+	}
+	if got := (&pytorchGRUModel{sequenceLength: 120}).InferenceLookback(); got != 120 {
+		t.Fatalf("PyTorch input length = %d, want artifact length 120", got)
+	}
+}
 
 func TestGRUArtifactRoundTripPredictsHorizonMaximum(t *testing.T) {
 	samples := gruTestSamples(180)
@@ -62,6 +75,32 @@ func TestPyTorchGRUArtifactRoundTripUsesTensorOnlyInference(t *testing.T) {
 	prediction, err := model.PredictSamples(gruTestSamples(180), Request{Horizon: 5 * time.Minute, SamplingInterval: time.Minute, Quantile: .95, BusinessLocation: time.UTC})
 	if err != nil || prediction.P50 != 5 || prediction.P95 != 5 {
 		t.Fatalf("prediction = %#v, %v", prediction, err)
+	}
+}
+
+func TestPyTorchGRUConsumesBoundedInterpolatedInputs(t *testing.T) {
+	hidden := 2
+	network := pytorchGRUNetworkData{WeightIH: make([]float64, 3*hidden*gruInputSize), WeightHH: make([]float64, 3*hidden*hidden), BiasIH: make([]float64, 3*hidden), BiasHH: make([]float64, 3*hidden), Head: make([]float64, hidden), HeadBias: .5}
+	artifact, err := json.Marshal(pytorchGRUArtifact{Engine: "gru", Format: pytorchGRUFormat, FeatureSchema: PyTorchGRUFeatureSchema, UpperQuantile: .95, Sequence: 120, Inputs: gruInputSize, Hidden: hidden, ValueScale: 10, P50: network, P95: network})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := LoadModel(StoredModel{ID: "pytorch-recovery", Engine: "gru", Artifact: artifact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed []domain.Sample
+	for index, sample := range gruTestSamples(140) {
+		if index != 134 && index != 135 {
+			observed = append(observed, sample)
+		}
+	}
+	input, err := dataset.PrepareInferenceHistory(observed, dataset.InterpolationPolicy{SamplingInterval: time.Minute, Lookback: model.(InferenceLookbackModel).InferenceLookback()})
+	if err != nil || input.EstimatedCount != 2 || len(input.Samples) != 120 {
+		t.Fatalf("PyTorch recovery inputs: estimated=%d samples=%d err=%v", input.EstimatedCount, len(input.Samples), err)
+	}
+	if prediction, err := model.PredictSamples(input.Samples, Request{Horizon: 10 * time.Minute, SamplingInterval: time.Minute, Quantile: .95, BusinessLocation: time.UTC}); err != nil || prediction.P95 != 5 {
+		t.Fatalf("recovered PyTorch inference: %#v, %v", prediction, err)
 	}
 }
 

@@ -65,6 +65,7 @@ type gruModel struct {
 
 func (m *gruModel) Engine() string               { return "gru" }
 func (m *gruModel) OperationalQuantile() float64 { return m.upperQuantile }
+func (m *gruModel) InferenceLookback() int       { return m.sequenceLength }
 
 func (m *gruModel) PredictSamples(samples []domain.Sample, request Request) (Prediction, error) {
 	if m == nil || m.sequenceLength < 1 || m.scale <= 0 {

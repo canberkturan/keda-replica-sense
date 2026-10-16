@@ -19,6 +19,11 @@ expectations.
   rate limits, headroom, and cluster-wide speculative budget guards.
 - Serves fresh, safety-approved predictive demand to KEDA through an
   in-memory external-scaler cache.
+- Automatically requests KEDA reconciliation when restart-time discovery leaves
+  a managed HPA missing its predictive metric.
+- Bridges tightly bounded short gaps with clearly marked, inference-only
+  estimates and conservative scaling safeguards; observed/training data remain
+  unchanged, and stale or unreliable inputs stay withheld.
 - Stores/evaluates snapshots; evaluates coverage, underprediction, MAE, and
   P95 pinball loss with walk-forward validation.
 - Schedules, validates, stores, and promotes per-workload XGBoost models
@@ -74,11 +79,14 @@ budget, temporal validation, and promotion behaviour.
 Native KEDA Prometheus triggers remain the reactive safety path. Predictive
 snapshots fail closed when their generation time or underlying source sample is
 stale or unsafe. After a source query recovers, ReplicaSense repairs a bounded
-recent gap only from Prometheus range-query data; otherwise it resumes from a
-continuous post-outage segment without inventing observations. ReplicaSense deploys two scaler
-replicas, a PDB, and preferred cross-node anti-affinity; a single scaler-pod
-loss continues serving metrics. **Accepted catastrophic-outage limitation:**
-if every external-scaler Service endpoint is lost, KEDA fails while discovering
-the external metric, before it can evaluate fallback or scaling modifiers. That
-event requires endpoint restoration; reactive scale-up is not available through
-the combined ScaledObject during the outage.
+recent gap from Prometheus range-query data. A short, stable gap may instead be
+bridged in a disposable inference buffer, with explicit estimated-input markers
+and tighter scaling limits; it never becomes observed or training data. Long or
+unreliable gaps require valid real post-outage context.
+
+ReplicaSense deploys two scaler replicas, a PDB, and preferred cross-node
+anti-affinity. If every scaler endpoint is unavailable, predictive scaling is
+unavailable and KEDA's metric discovery can fail or leave a reactive-only HPA.
+After endpoint restoration, the elected ReplicaSense controller requests KEDA
+reconciliation for missing predictive metrics. See the
+[architecture guide](docs/architecture.md) for the recovery boundaries.

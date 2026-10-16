@@ -2,7 +2,61 @@
 
 This project follows semantic versioning. The notes below describe the
 production-facing changes introduced after `v0.2.6` and delivered through the
-`v0.3.9` release line.
+`v0.4.0` release line.
+
+## 0.4.0 — 2026-10-16
+
+### Restart recovery
+
+- Added a leader-elected controller check for predictive metrics missing from
+  existing KEDA-owned HPAs after a scaler discovery/startup failure. It probes
+  the KEDA metrics API and patches only HPA metadata to request reconciliation;
+  KEDA remains the writer of metric specifications and replica decisions.
+- Recovery scans every 30 seconds, retries with bounded exponential backoff,
+  checks owner UIDs, and respects custom HPA names. Unrelated, deleting, paused,
+  and composite `scalingModifiers` resources are excluded.
+- Added read-only external-metrics access and HPA get/patch permissions to the
+  controller's Helm role. The check needs no scaler authentication Secrets or
+  direct controller-to-scaler network access.
+
+### Bounded short-gap inference
+
+- Added inference-only interpolation for short, stable source gaps. Real
+  anchors are normally at most five minutes apart, estimated inputs are limited
+  to 5%, and two distinct real post-gap sampling slots are required. There is
+  no extrapolation of stale tails; long or unreliable gaps stay withheld until
+  sufficient valid real context is available.
+- Estimated inputs are marked in memory, Prometheus metrics, and forecast audit
+  reasons. They are never written to observed samples, used for training or
+  validation targets, or treated as surge evidence.
+- Recovery recommendations cannot request downscale from estimated inputs and
+  limit speculative scale-up to one replica per decision with the existing
+  health, capacity, bounds, and budget guards still applied.
+- Separated trained-model input requirements from seasonal training history:
+  native XGBoost uses 61 samples; both GRU implementations use the sequence length
+  recorded in the artifact. Backfill/live overlap cannot fake recovery
+  confirmations or shrink the model's real sampling window.
+
+### Monitoring, packaging, and verification
+
+- Added missing-HPA-metric and recovery-outcome metrics, forecast readiness and
+  withholding reasons, and counts of estimated inference inputs. Failed workload
+  forecasts remove old demand gauges instead of displaying a frozen guess.
+- Added per-component image-pull-policy overrides and refreshed chart defaults,
+  image references, installation examples, and Artifact Hub metadata for 0.4.0.
+- Added tests for recovery ownership/backoff, unchanged ScaledObject policies,
+  bounded interpolation and provenance, real-only surge inputs, conservative
+  scaling, and native XGBoost/CPU PyTorch artifact inference. An opt-in lab test
+  reproduces partial KEDA metric discovery and verifies automatic restoration.
+
+### Upgrade notes
+
+- Upgrade with the 0.4.0 Helm chart so the controller receives its new RBAC
+  permissions. Recovery and bounded interpolation are enabled by default;
+  operational settings are documented in the installation and architecture
+  guides.
+- No database schema migration, model reset, or retraining is required for an
+  existing 0.3.9 installation. Do not rerun the bootstrap schema on that database.
 
 ## 0.3.9 — 2026-10-13
 

@@ -34,6 +34,45 @@ requested training window from Prometheus, then records point samples at the
 configured interval. Samples are tied to the contract fingerprint, so a query
 change starts a clean data lineage instead of mixing unrelated metrics.
 
+### Short interruptions and estimated inference inputs
+
+A few missed minutes should not force a trained model to wait for a new day of
+history. The forecaster can bridge a short gap between two actual observations
+with linear interpolation in a disposable input buffer. These values never go
+into the `samples` table, Trainer Jobs, validation targets, or surge evidence.
+The real source timestamp remains the freshness check; there is no tail
+extrapolation and an old forecast is never made fresh by changing its timestamp.
+
+Recovery is enabled by default. The actual bounding observations must be at most
+five minutes apart, with sampling-alignment jitter allowance. Their values must
+be reasonably close (relative difference at most 25% of the larger anchor, with
+a unit floor), and at most 5% of model inputs and the freshest 60 input slots may
+be estimated. At least two distinct real sampling slots must follow the gap.
+Backfill/live overlap is reduced to the latest real observation per slot only
+in this disposable buffer; the persisted observations are left unchanged.
+
+Trained XGBoost uses its current point plus 60 lag samples. GRU uses the sequence
+length recorded in its artifact, including CPU PyTorch artifacts. This inference
+lookback is separate from the training window and validation requirements.
+Statistical models retain their normal history requirements. A long gap, unstable
+anchors, or excessive missingness is not bridged: forecasting remains withheld
+until there is enough fresh, valid post-gap context for the selected model.
+
+When estimated inputs are used, the forecast audit reason includes
+`inference_interpolated_points=N;conservative_gap_recovery`. The operational
+recommendation cannot request downscale from estimated inputs, and predictive
+scale-up is capped at one additional replica per decision, with a 25% fractional
+guard before HPA rounding. Existing cluster-health, capacity, replica-bound, and
+speculative-budget checks still apply. This is a cautious recovery estimate,
+not a claim that the missing demand was observed. Native KEDA remains the
+reactive path, and surge detection consumes distinct real post-gap observations.
+
+Set `REPLICASENSE_SHORT_GAP_INTERPOLATION_ENABLED=false` to disable bridging,
+or lower `REPLICASENSE_INFERENCE_MAX_GAP` from its `5m` default. Both are
+available under `components.forecaster.env` in Helm. Look at
+`replicasense_forecast_ready`, `replicasense_forecast_status`, and
+`replicasense_forecast_input_estimated_samples` when diagnosing recovery.
+
 The forecaster asks, “what is the highest demand likely to occur in the next
 decision horizon?” It returns one horizon-maximum value, not a minute-by-minute
 trajectory. This is why several consecutive forecasts can be close together
@@ -64,8 +103,32 @@ The chart uses a small, purposeful topology:
 The scaler is the availability-sensitive component because KEDA must discover
 every trigger on a combined ScaledObject. Keep two replicas, keep the PDB, and
 place them on separate nodes when the cluster has more than one node. If every
-scaler endpoint is unavailable, restore an endpoint first; KEDA cannot then
-evaluate the combined ScaledObject, including its native trigger.
+scaler endpoint is unavailable, KEDA cannot read the predictive trigger's metric
+specification. During discovery it can leave a combined HPA configured with
+only the native metric, even after the scaler becomes reachable again.
+
+The elected ReplicaSense controller checks existing KEDA-owned HPAs every 30
+seconds. If a valid ReplicaSense trigger is missing from an HPA, it first checks
+that metric through KEDA's external metrics API, then changes only the HPA's
+`replicasense.keda.sh/predictive-metric-recovery` annotation. KEDA watches HPA
+annotation changes and rebuilds the metric configuration itself. ReplicaSense
+does not write HPA metric specifications, replica counts, or ScaledObject
+training settings. Discovery can recover with a zero predictive value, so it
+does not need to wait for training or an active prediction.
+
+Failed probes and reconciliation requests back off from 30 seconds to at most
+five minutes. A restored metric resets the backoff. Recovery respects custom
+HPA names and verifies the ScaledObject owner's UID; unrelated, deleting, or
+paused resources are left alone. ScaledObjects using `scalingModifiers` are
+excluded because their HPAs intentionally contain a composite metric, not the
+individual predictive trigger metric. Missing HPAs are left for KEDA to create.
+
+The controller needs HPA `get`/`patch` and external-metric `get`/`list` permissions;
+the Helm chart supplies these. It needs no scaler authentication Secrets or
+direct controller-to-scaler network access. Monitor
+`replicasense_hpa_missing_predictive_metrics` and
+`replicasense_hpa_recovery_total` to distinguish a missing HPA configuration
+from a forecast that is safely withheld.
 
 The sampler and forecaster are intentionally singletons by default. Their work
 is persisted in PostgreSQL and duplicate writers do not make forecasts safer.

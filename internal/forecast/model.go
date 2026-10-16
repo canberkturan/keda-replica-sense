@@ -38,6 +38,12 @@ type Model interface {
 	PredictSamples([]domain.Sample, Request) (Prediction, error)
 }
 
+// InferenceLookbackModel describes fixed inputs of an already trained model.
+// Training/validation history requirements remain separate and unchanged.
+type InferenceLookbackModel interface {
+	InferenceLookback() int
+}
+
 // UpperQuantileModel exposes the training quantile of a statistical artifact.
 // Model caches use it to prevent a valid-but-differently-configured artifact
 // from being served after a workload quantile change.

@@ -33,13 +33,26 @@ controller and external scaler each have two replicas and a PDB. For a
 production installation, put reviewed resource settings and image digests in a
 values file. An image `digest`, when set for a component, takes precedence over
 its `tag`.
+`components.<name>.imagePullPolicy` can override the global `imagePullPolicy`
+for one component, for example when testing a locally loaded controller image.
+
+The elected controller automatically checks for missing predictive metrics on
+KEDA-owned HPAs after startup failures. Recovery probes KEDA's metrics API and
+patches only HPA metadata to request reconciliation. The controller role grants
+HPA `get`/`patch` and external metric `get`/`list`, but no replica/scale-subresource
+permissions. It does not change ScaledObject training settings or HPA metric
+specifications. Paused ScaledObjects and composite `scalingModifiers` HPAs are
+excluded. Configure or disable this check through
+`components.controller.env.REPLICASENSE_HPA_RECOVERY_ENABLED` and the associated
+`REPLICASENSE_HPA_RECOVERY_INTERVAL` / `REPLICASENSE_HPA_RECOVERY_PROBE_TIMEOUT`
+settings.
 
 Published releases are available as an OCI chart. For example, after the
-`v0.3.9` Git tag completes the release workflow:
+`v0.4.0` Git tag completes the release workflow:
 
 ```bash
 helm upgrade --install replicasense oci://ghcr.io/canberkturan/charts/replicasense \
-  --version 0.3.9 \
+  --version 0.4.0 \
   --namespace replicasense-system \
   --set clusterID=YOUR_CLUSTER_ID
 ```

@@ -36,6 +36,7 @@ type xgboostModel struct {
 
 func (m *xgboostModel) Engine() string               { return "xgboost" }
 func (m *xgboostModel) OperationalQuantile() float64 { return m.upperQuantile }
+func (m *xgboostModel) InferenceLookback() int       { return 61 }
 
 func (m *xgboostModel) PredictSamples(samples []domain.Sample, request Request) (Prediction, error) {
 	if m == nil || m.p50 == nil || m.p95 == nil {

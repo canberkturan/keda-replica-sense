@@ -52,6 +52,7 @@ type pytorchGRUModel struct {
 
 func (m *pytorchGRUModel) Engine() string               { return "gru" }
 func (m *pytorchGRUModel) OperationalQuantile() float64 { return m.upperQuantile }
+func (m *pytorchGRUModel) InferenceLookback() int       { return m.sequenceLength }
 
 func (m *pytorchGRUModel) PredictSamples(samples []domain.Sample, request Request) (Prediction, error) {
 	if m == nil || m.sequenceLength < 1 || m.inputs != gruInputSize || m.hidden < 1 || m.scale <= 0 {
